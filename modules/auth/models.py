@@ -8,6 +8,21 @@ role_permissions = db.Table('role_permissions',
     db.Column('permission_id', db.Integer, db.ForeignKey('permissions.id'), primary_key=True)
 )
 
+class TokenBlacklist(db.Model):
+    __tablename__ = 'token_blacklist'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    jti = db.Column(db.String(36), nullable=False, unique=True)  # JWT ID
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    revoked_at = db.Column(db.DateTime, default=datetime.utcnow)
+    expires_at = db.Column(db.DateTime, nullable=False)
+    
+    # Relation avec l'utilisateur
+    user = db.relationship('User', backref='revoked_tokens')
+
+    def __repr__(self):
+        return f'<TokenBlacklist {self.jti[:8]}... by user {self.user_id}>'
+        
 class Role(db.Model):
     __tablename__ = 'roles'
 

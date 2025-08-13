@@ -15,6 +15,67 @@ def create_app(config_class=Config):
     db.init_app(app)
     jwt.init_app(app)
     cors.init_app(app)
+
+    def setup_jwt_callbacks(app, jwt):
+        """Configuration complète des callbacks JWT"""
+    
+    @jwt.token_in_blocklist_loader
+    def check_if_token_revoked(jwt_header, jwt_payload):
+        """Vérifie si un token est dans la blacklist"""
+        try:
+            jti = jwt_payload.get('jti')
+            if not jti:
+                return False
+            
+            # Importer ici pour éviter les imports circulaires
+            from modules.auth.services import AuthService
+            is_revoked = AuthService.is_token_revoked(jti)
+            
+            if is_revoked:
+                print(f"🚫 Token {jti[:8]}... est révoqué")
+            
+            return is_revoked
+            
+        except Exception as e:
+            print(f"❌ Erreur check_revoked: {str(e)}")
+            return False  # En cas d'erreur, ne pas bloquer
+    
+    @jwt.revoked_token_loader
+    def revoked_token_callback(jwt_header, jwt_payload):
+        """Appelé quand un token révoqué est utilisé"""
+        jti = jwt_payload.get('jti', 'unknown')
+        print(f"🚫 Tentative d'usage d'un token révoqué: {jti[:8]}...")
+        
+        return jsonify({
+            'error': 'Token has been revoked',
+            'message': 'Please login again to get a new token'
+        }), 401
+    
+    @jwt.expired_token_loader
+    def expired_token_callback(jwt_header, jwt_payload):
+        """Appelé quand un token expiré est utilisé"""
+        return jsonify({
+            'error': 'Token has expired',
+            'message': 'Please login again to get a new token'
+        }), 401
+    
+    @jwt.invalid_token_loader
+    def invalid_token_callback(error_string):
+        """Appelé quand le token est malformé"""
+        print(f"🚫 Token invalide: {error_string}")
+        return jsonify({
+            'error': 'Invalid token format',
+            'message': 'Please provide a valid token'
+        }), 401
+    
+    @jwt.unauthorized_loader
+    def missing_token_callback(error_string):
+        """Appelé quand aucun token n'est fourni"""
+        return jsonify({
+            'error': 'Authorization token required',
+            'message': 'Please provide a valid token in Authorization header'
+        }), 401
+
     
     print("Extensions initialisées")
     
