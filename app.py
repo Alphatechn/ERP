@@ -1,72 +1,55 @@
-from flask import Flask 
-from backend.cores.database import init_db, db
-from backend.cores.extensions import init_extensions, login_manager
-from config import config
-import os
+from flask import Flask, jsonify
+from config import Config
+from core.database import db
+from core.extensions import jwt, cors
+from modules.auth.routes import auth_bp
+from modules.auth.services import AuthService
 
-def create_app(config_name=None):
-    """Factory pattern pour créer l'application Flask"""
-    if config_name is None:
-        config_name = os.environ.get('FLASK_ENV', 'development')
-    
+def create_app(config_class=Config):
     app = Flask(__name__)
-    app.config.from_object(config[config_name])
+    app.config.from_object(config_class)
     
-    # Initialiser la base de données
-    init_db(app)
+    print("Configuration de l'application...")
     
     # Initialiser les extensions
-    init_extensions(app)
+    db.init_app(app)
+    jwt.init_app(app)
+    cors.init_app(app)
     
-    # User loader pour Flask-Login
-    @login_manager.user_loader
-    def load_user(user_id):
-        from backend.modules.auth.models import User
-        return User.query.get(int(user_id))
-    
-    # Créer les tables si elles n'existent pas
-    with app.app_context():
-        db.create_all()
-    
-    # Importer et enregistrer les modules
-    from backend.modules.auth.routes import auth_bp
-    app.register_blueprint(auth_bp)
-    
-    # TODO: Enregistrer les autres modules quand ils seront créés
-    # from backend.modules.rh.routes import rh_bp
-    # app.register_blueprint(rh_bp)
-    
-    # from backend.modules.paie.routes import paie_bp
-    # app.register_blueprint(paie_bp)
-    
-    # from backend.modules.stock.routes import stock_bp
-    # app.register_blueprint(stock_bp)
-    
-    # from backend.modules.ventes.routes import ventes_bp
-    # app.register_blueprint(ventes_bp)
+    print("Extensions initialisées")
     
     # Route de test
     @app.route('/')
     def index():
-        return {
-            'message': 'ERP Flask API',
+        return jsonify({
+            'message': 'ERP Backend API is running!',
             'version': '1.0.0',
-            'status': 'running'
-        }
+            'endpoints': ['/api/auth/register', '/api/auth/login']
+        })
     
-    # Gestionnaire d'erreurs global
-    @app.errorhandler(404)
-    def not_found(error):
-        return {'error': True, 'message': 'Route non trouvée'}, 404
+    # Enregistrer les blueprints
+    app.register_blueprint(auth_bp)
+    print("Blueprints enregistrés")
     
-    @app.errorhandler(500)
-    def internal_error(error):
-        db.session.rollback()
-        return {'error': True, 'message': 'Erreur interne du serveur'}, 500
+    # Initialiser la base de données
+    with app.app_context():
+        try:
+            print("Création des tables...")
+            db.create_all()
+            print("Tables créées avec succès")
+            
+            # Initialiser les rôles et permissions par défaut
+            AuthService.init_default_roles_and_permissions()
+            
+        except Exception as e:
+            print(f"Erreur lors de l'initialisation de la DB: {e}")
     
+    print("Application créée avec succès!")
     return app
 
+# Créer l'application
 app = create_app()
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000) 
+    print("Démarrage du serveur Flask...")
+    app.run(debug=True, host='0.0.0.0', port=5000)

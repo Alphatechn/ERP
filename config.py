@@ -1,53 +1,28 @@
 import os
-from datetime import timedelta
+from dotenv import load_dotenv
+
+load_dotenv()
 
 class Config:
-    # Configuration de base
-    SECRET_KEY = os.environ.get('SECRET_KEY') or 'dev-secret-key-change-in-production'
+    SECRET_KEY = os.getenv('SECRET_KEY')
+    JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY')
     
-    # Configuration de la base de données PostgreSQL
-    DB_HOST = os.environ.get('DB_HOST') or 'localhost'
-    DB_PORT = os.environ.get('DB_PORT') or '5432'
-    DB_NAME = os.environ.get('DB_NAME') or 'erp_db'
-    DB_USER = os.environ.get('DB_USER') or 'postgres'
-    DB_PASSWORD = os.environ.get('DB_PASSWORD') or 'password'
+    # Configuration PostgreSQL
+    DB_USER = os.getenv('DB_USER')
+    DB_PASSWORD = os.getenv('DB_PASSWORD')
+    DB_HOST = os.getenv('DB_HOST')
+    DB_PORT = os.getenv('DB_PORT')
+    DB_NAME = os.getenv('DB_NAME')
     
-    # Configuration Flask-Login
-    REMEMBER_COOKIE_DURATION = timedelta(days=30)
-    REMEMBER_COOKIE_SECURE = False  # True en production avec HTTPS
-    REMEMBER_COOKIE_HTTPONLY = True
-    SESSION_PROTECTION = 'strong'
+    SQLALCHEMY_DATABASE_URI = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+    SQLALCHEMY_TRACK_MODIFICATIONS = False
     
-    # Configuration CORS
-    CORS_ORIGINS = os.environ.get('CORS_ORIGINS', 'http://localhost:3000').split(',')
-    
-    # Configuration de logging
-    LOG_LEVEL = os.environ.get('LOG_LEVEL') or 'INFO'
-    
-    # Configuration de sécurité
-    BCRYPT_LOG_ROUNDS = 12
-    
-    # Configuration des uploads
-    UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
-    MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16MB max file size
+    JWT_TOKEN_LOCATION = ['headers']
+    JWT_HEADER_NAME = 'Authorization'
+    JWT_HEADER_TYPE = 'Bearer'
 
 class DevelopmentConfig(Config):
     DEBUG = True
-    SQLALCHEMY_TRACK_MODIFICATIONS = True
 
 class ProductionConfig(Config):
     DEBUG = False
-    SQLALCHEMY_TRACK_MODIFICATIONS = False
-    REMEMBER_COOKIE_SECURE = True
-
-class TestingConfig(Config):
-    TESTING = True
-    DB_NAME = 'erp_test_db'
-    WTF_CSRF_ENABLED = False
-
-config = {
-    'development': DevelopmentConfig,
-    'production': ProductionConfig,
-    'testing': TestingConfig,
-    'default': DevelopmentConfig
-}
