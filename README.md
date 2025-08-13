@@ -2,7 +2,7 @@
 
 Un système ERP (Enterprise Resource Planning) moderne développé avec Flask, offrant une architecture modulaire et évolutive.
 
-## 🏗️ Architecture
+##  Architecture
 
 Le projet suit une architecture modulaire avec les composants suivants :
 
@@ -24,7 +24,7 @@ erp-project/
 │       └── ventes/      # Gestion des ventes
 ```
 
-## 🚀 Installation
+##  Installation
 
 ### Prérequis
 
@@ -83,9 +83,9 @@ erp-project/
 
 L'API sera accessible sur `http://localhost:5000`
 
-## 📚 Modules disponibles
+##  Modules disponibles
 
-### 🔐 Module d'authentification (`/api/auth`)
+###  Module d'authentification (`/api/auth`)
 
 **Routes principales :**
 - `POST /api/auth/register` - Inscription d'un nouvel utilisateur
@@ -103,7 +103,7 @@ L'API sera accessible sur `http://localhost:5000`
 - `POST /api/auth/users/<id>/activate` - Activer un utilisateur
 - `POST /api/auth/users/<id>/deactivate` - Désactiver un utilisateur
 
-### 👥 Module RH (Ressources Humaines)
+###  Module RH (Ressources Humaines)
 
 **Fonctionnalités :**
 - Gestion des employés
@@ -112,7 +112,7 @@ L'API sera accessible sur `http://localhost:5000`
 - Suivi des présences
 - Gestion des contrats
 
-### 💰 Module Paie
+###  Module Paie
 
 **Fonctionnalités :**
 - Calcul des salaires
@@ -120,7 +120,7 @@ L'API sera accessible sur `http://localhost:5000`
 - Gestion des charges sociales
 - Génération des bulletins de paie
 
-### 📦 Module Stock
+###  Module Stock
 
 **Fonctionnalités :**
 - Gestion des produits
@@ -129,7 +129,7 @@ L'API sera accessible sur `http://localhost:5000`
 - Gestion des commandes
 - Alertes de stock
 
-### 🛒 Module Ventes
+###  Module Ventes
 
 **Fonctionnalités :**
 - Gestion des clients
@@ -138,7 +138,7 @@ L'API sera accessible sur `http://localhost:5000`
 - Suivi des ventes
 - Rapports de vente
 
-## 🔧 Configuration
+##  Configuration
 
 ### Variables d'environnement
 
@@ -159,7 +159,7 @@ L'API sera accessible sur `http://localhost:5000`
 - **Production** : Mode production optimisé
 - **Testing** : Mode test avec base de données de test
 
-## 🔒 Sécurité
+##  Sécurité
 
 - **Authentification Flask-Login** : Sessions sécurisées avec cookies
 - **Hachage des mots de passe** : Bcrypt avec 12 rounds
@@ -168,7 +168,7 @@ L'API sera accessible sur `http://localhost:5000`
 - **Gestion des erreurs** : Réponses d'erreur standardisées
 - **Protection des sessions** : Configuration forte des cookies
 
-## 📝 Exemples d'utilisation
+##  Exemples d'utilisation
 
 ### Créer un utilisateur
 ```bash
@@ -208,7 +208,7 @@ curl -X POST http://localhost:5000/api/auth/logout \
   -b cookies.txt
 ```
 
-## 🧪 Tests
+##  Tests
 
 ```bash
 # Lancer les tests
@@ -218,7 +218,7 @@ python -m pytest
 python -m pytest --cov=backend
 ```
 
-## 📊 Base de données
+##  Base de données
 
 ### Modèles principaux
 
@@ -242,7 +242,7 @@ flask db upgrade
 flask db downgrade
 ```
 
-## 🚀 Déploiement
+##  Déploiement
 
 ### Production avec Gunicorn
 
@@ -257,7 +257,7 @@ docker build -t erp-flask .
 docker run -p 5000:5000 erp-flask
 ```
 
-## 🤝 Contribution
+##  Contribution
 
 1. Fork le projet
 2. Créer une branche feature (`git checkout -b feature/AmazingFeature`)
@@ -265,9 +265,10 @@ docker run -p 5000:5000 erp-flask
 4. Push vers la branche (`git push origin feature/AmazingFeature`)
 5. Ouvrir une Pull Request
 
-## 📄 Licence
+##  Licence
 
 Ce projet est sous licence MIT. Voir le fichier `LICENSE` pour plus de détails.
+## CECI EST UNE PREMIERE BASE POUR LE BACK 
 
 ## 📞 Support
 
