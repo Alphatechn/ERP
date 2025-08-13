@@ -32,12 +32,28 @@ class AuthService:
         if not user or not user.check_password(password) or not user.is_active:
             return None
         
-        # Créer le token JWT
+        # Récupérer les permissions du rôle
+        permissions = [p.code for p in user.role_ref.permissions] if user.role_ref else []
+        
+        # Créer le token avec les claims étendus
         access_token = create_access_token(
             identity=user.id,
-            additional_claims={'role': user.role_ref.name if user.role_ref else 'user'}
+            additional_claims={
+                'role': user.role_ref.name if user.role_ref else 'user',
+                'permissions': permissions,
+                'email': user.email
+            }
         )
-        return access_token
+        
+        return {
+            'access_token': access_token,
+            'user_info': {
+                'id': user.id,
+                'username': user.username,
+                'role': user.role_ref.name if user.role_ref else 'user',
+                'permissions': permissions
+            }
+        }
 
     @staticmethod
     def init_default_roles_and_permissions():
