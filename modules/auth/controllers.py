@@ -3,7 +3,7 @@ from .services import AuthService
 from flask_jwt_extended import verify_jwt_in_request, get_jwt, get_jwt_identity, decode_token
 from datetime import datetime
 from core.database import db
-
+from .models import User
 class AuthController:
     @staticmethod
     def register():
