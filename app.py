@@ -2,8 +2,9 @@ from flask import Flask, jsonify
 from config import Config
 from core.database import db
 from core.extensions import jwt, cors
-from modules.auth.routes import auth_bp
-from modules.auth.services import AuthService
+from modules.auth.routes import extended_auth_bp
+from modules.auth.services import ExtendedAuthService
+from modules.rh.routes import personnel_bp
 
 def create_app(config_class=Config):
     app = Flask(__name__)
@@ -28,8 +29,8 @@ def create_app(config_class=Config):
                 return False
             
             # Importer ici pour éviter les imports circulaires
-            from modules.auth.services import AuthService
-            is_revoked = AuthService.is_token_revoked(jti)
+            from modules.auth.services import ExtendedAuthService
+            is_revoked = ExtendedAuthService.is_token_revoked(jti)
             
             if is_revoked:
                 print(f"🚫 Token {jti[:8]}... est révoqué")
@@ -89,7 +90,8 @@ def create_app(config_class=Config):
         })
     
     # Enregistrer les blueprints
-    app.register_blueprint(auth_bp)
+    app.register_blueprint(extended_auth_bp)
+    app.register_blueprint(personnel_bp)
     print("Blueprints enregistrés")
     
     # Initialiser la base de données
@@ -100,7 +102,7 @@ def create_app(config_class=Config):
             print("Tables créées avec succès")
             
             # Initialiser les rôles et permissions par défaut
-            AuthService.init_default_roles_and_permissions()
+            ExtendedAuthService.init_default_roles_and_permissions()
             
         except Exception as e:
             print(f"Erreur lors de l'initialisation de la DB: {e}")

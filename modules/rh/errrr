@@ -1,0 +1,905 @@
+# === CONTRÔLEURS MANQUANTS POUR LE MODULE PERSONNEL ===
+
+from flask import request, jsonify, current_app
+from datetime import datetime, date
+from .services import DocumentService, AbsenceService, RubriqueService
+from .models import Personnel, Service, Poste, Exercice, Rubrique, Absence, Document
+from flask_jwt_extended import verify_jwt_in_request, get_jwt, get_jwt_identity
+
+class DocumentController:
+    """Contrôleur pour la gestion des documents du personnel"""
+    
+    @staticmethod
+    def upload_document():
+        """Upload un document pour un personnel"""
+        try:
+            verify_jwt_in_request()
+            
+            personnel_id = request.form.get('personnel_id', type=int)
+            libelle = request.form.get('libelle')
+            
+            if 'file' not in request.files:
+                return jsonify({
+                    'success': False,
+                    'message': 'Aucun fichier fourni'
+                }), 400
+            
+            file = request.files['file']
+            if file.filename == '':
+                return jsonify({
+                    'success': False,
+                    'message': 'Nom de fichier vide'
+                }), 400
+            
+            document = DocumentService.upload_document(
+                personnel_id=personnel_id,
+                file=file,
+                libelle=libelle
+            )
+            
+            return jsonify({
+                'success': True,
+                'message': 'Document uploadé avec succès',
+                'data': {
+                    'id': document.id,
+                    'libelle': document.libelle,
+                    'url_fichier': document.url_fichier,
+                    'date_creation': document.date_creation.isoformat()
+                }
+            }), 201
+            
+        except Exception as e:
+            return jsonify({
+                'success': False,
+                'message': str(e)
+            }), 400
+    
+    @staticmethod
+    def get_personnel_documents(personnel_id):
+        """Récupère tous les documents d'un personnel"""
+        try:
+            verify_jwt_in_request()
+            
+            documents = DocumentService.get_personnel_documents(personnel_id)
+            
+            documents_data = []
+            for doc in documents:
+                documents_data.append({
+                    'id': doc.id,
+                    'libelle': doc.libelle,
+                    'url_fichier': doc.url_fichier,
+                    'date_creation': doc.date_creation.isoformat(),
+                    'taille_fichier': doc.taille_fichier
+                })
+            
+            return jsonify({
+                'success': True,
+                'data': documents_data
+            })
+            
+        except Exception as e:
+            return jsonify({
+                'success': False,
+                'message': str(e)
+            }), 400
+    
+    @staticmethod
+    def delete_document(document_id):
+        """Supprime un document"""
+        try:
+            verify_jwt_in_request()
+            claims = get_jwt()
+            
+            # Vérification des permissions
+            if 'manage_hr' not in claims.get('permissions', []):
+                return jsonify({
+                    'success': False,
+                    'message': 'Permissions insuffisantes'
+                }), 403
+            
+            DocumentService.delete_document(document_id)
+            
+            return jsonify({
+                'success': True,
+                'message': 'Document supprimé avec succès'
+            })
+            
+        except Exception as e:
+            return jsonify({
+                'success': False,
+                'message': str(e)
+            }), 400
+
+class AbsenceController:
+    """Contrôleur pour la gestion des absences"""
+    
+    @staticmethod
+    def create_absence():
+        """Enregistre une nouvelle absence"""
+        try:
+            verify_jwt_in_request()
+            data = request.get_json()
+            
+            absence = AbsenceService.create_absence(
+                personnel_id=data.get('personnel_id'),
+                libelle=data.get('libelle'),
+                date_debut=datetime.strptime(data.get('date_debut'), '%Y-%m-%d').date(),
+                date_fin=datetime.strptime(data.get('date_fin'), '%Y-%m-%d').date(),
+                motif=data.get('motif'),
+                justifiee=data.get('justifiee', False)
+            )
+            
+            return jsonify({
+                'success': True,
+                'message': 'Absence enregistrée avec succès',
+                'data': {
+                    'id': absence.id,
+                    'libelle': absence.libelle,
+                    'nb_jours': absence.nb_jours,
+                    'justifiee': absence.justifiee
+                }
+            }), 201
+            
+        except Exception as e:
+            return jsonify({
+                'success': False,
+                'message': str(e)
+            }), 400
+    
+    @staticmethod
+    def get_absences_personnel(personnel_id):
+        """Récupère les absences d'un personnel"""
+        try:
+            verify_jwt_in_request()
+            
+            # Récupérer les paramètres de période
+            periode = None
+            if request.args.get('date_debut') and request.args.get('date_fin'):
+                periode = {
+                    'debut': datetime.strptime(request.args.get('date_debut'), '%Y-%m-%d').date(),
+                    'fin': datetime.strptime(request.args.get('date_fin'), '%Y-%m-%d').date()
+                }
+            
+            absences = AbsenceService.get_absences_personnel(personnel_id, periode)
+            
+            absences_data = []
+            for absence in absences:
+                absences_data.append({
+                    'id': absence.id,
+                    'libelle': absence.libelle,
+                    'date_debut': absence.date_debut.isoformat(),
+                    'date_fin': absence.date_fin.isoformat(),
+                    'nb_jours': absence.nb_jours,
+                    'motif': absence.motif,
+                    'justifiee': absence.justifiee
+                })
+            
+            return jsonify({
+                'success': True,
+                'data': absences_data
+            })
+            
+        except Exception as e:
+            return jsonify({
+                'success': False,
+                'message': str(e)
+            }), 400
+    
+    @staticmethod
+    def get_rapport_absences():
+        """Génère un rapport d'absences"""
+        try:
+            verify_jwt_in_request()
+            claims = get_jwt()
+            
+            # Vérification des permissions
+            if claims.get('user_type') not in ['responsable_rh', 'administrateur']:
+                return jsonify({
+                    'success': False,
+                    'message': 'Accès limité aux responsables RH et administrateurs'
+                }), 403
+            
+            service_id = request.args.get('service_id', type=int)
+            mois_annee = request.args.get('mois_annee')  # Format: "2024-01"
+            
+            rapport = AbsenceService.get_rapport_absences(service_id, mois_annee)
+            
+            rapport_data = []
+            for ligne in rapport:
+                rapport_data.append({
+                    'matricule': ligne.matricule,
+                    'nom_complet': f"{ligne.nom} {ligne.prenom}",
+                    'service': ligne.service,
+                    'nb_absences': ligne.nb_absences,
+                    'total_jours': ligne.total_jours
+                })
+            
+            return jsonify({
+                'success': True,
+                'message': 'Rapport d\'absences généré',
+                'data': rapport_data,
+                'filters': {
+                    'service_id': service_id,
+                    'mois_annee': mois_annee
+                }
+            })
+            
+        except Exception as e:
+            return jsonify({
+                'success': False,
+                'message': str(e)
+            }), 400
+
+class ContratController:
+    """Contrôleur pour la gestion des contrats"""
+    
+    @staticmethod
+    def create_contrat():
+        """Crée un nouveau contrat"""
+        try:
+            verify_jwt_in_request()
+            claims = get_jwt()
+            
+            # Vérification des permissions
+            if 'manage_hr' not in claims.get('permissions', []):
+                return jsonify({
+                    'success': False,
+                    'message': 'Permissions insuffisantes'
+                }), 403
+            
+            data = request.get_json()
+            
+            contrat = ContratService.create_contrat(
+                personnel_id=data.get('personnel_id'),
+                type_contrat=data.get('type'),
+                date_debut=datetime.strptime(data.get('date_debut'), '%Y-%m-%d').date(),
+                salaire_base=float(data.get('salaire_base')),
+                date_fin=datetime.strptime(data.get('date_fin'), '%Y-%m-%d').date() if data.get('date_fin') else None
+            )
+            
+            return jsonify({
+                'success': True,
+                'message': 'Contrat créé avec succès',
+                'data': {
+                    'id': contrat.id,
+                    'type': contrat.type,
+                    'date_debut': contrat.date_debut.isoformat(),
+                    'date_fin': contrat.date_fin.isoformat() if contrat.date_fin else None,
+                    'salaire_base': contrat.salaire_base,
+                    'status': contrat.status
+                }
+            }), 201
+            
+        except Exception as e:
+            return jsonify({
+                'success': False,
+                'message': str(e)
+            }), 400
+    
+    @staticmethod
+    def get_contrats_personnel(personnel_id):
+        """Récupère tous les contrats d'un personnel"""
+        try:
+            verify_jwt_in_request()
+            
+            contrats = ContratService.get_contrats_personnel(personnel_id)
+            
+            contrats_data = []
+            for contrat in contrats:
+                contrats_data.append({
+                    'id': contrat.id,
+                    'type': contrat.type,
+                    'date_debut': contrat.date_debut.isoformat(),
+                    'date_fin': contrat.date_fin.isoformat() if contrat.date_fin else None,
+                    'salaire_base': contrat.salaire_base,
+                    'status': contrat.status
+                })
+            
+            return jsonify({
+                'success': True,
+                'data': contrats_data
+            })
+            
+        except Exception as e:
+            return jsonify({
+                'success': False,
+                'message': str(e)
+            }), 400
+    
+    @staticmethod
+    def get_contrats_expires():
+        """Récupère les contrats qui arrivent à expiration"""
+        try:
+            verify_jwt_in_request()
+            claims = get_jwt()
+            
+            # Vérification des permissions
+            if claims.get('user_type') not in ['responsable_rh', 'administrateur']:
+                return jsonify({
+                    'success': False,
+                    'message': 'Accès limité aux responsables RH et administrateurs'
+                }), 403
+            
+            contrats = ContratService.get_contrats_expires()
+            
+            contrats_data = []
+            for contrat in contrats:
+                contrats_data.append({
+                    'id': contrat.id,
+                    'personnel': {
+                        'id': contrat.personnel_ref.id,
+                        'matricule': contrat.personnel_ref.matricule,
+                        'nom_complet': contrat.personnel_ref.nom_complet,
+                        'service': contrat.personnel_ref.service_ref.libelle
+                    },
+                    'type': contrat.type,
+                    'date_fin': contrat.date_fin.isoformat(),
+                    'jours_restants': (contrat.date_fin - date.today()).days
+                })
+            
+            return jsonify({
+                'success': True,
+                'message': f'{len(contrats_data)} contrats arrivent à expiration',
+                'data': contrats_data
+            })
+            
+        except Exception as e:
+            return jsonify({
+                'success': False,
+                'message': str(e)
+            }), 400
+
+class RubriqueController:
+    """Contrôleur pour la gestion des rubriques de paie"""
+    
+    @staticmethod
+    def create_rubrique():
+        """Crée une nouvelle rubrique de paie"""
+        try:
+            verify_jwt_in_request()
+            claims = get_jwt()
+            
+            # Vérification des permissions
+            if claims.get('user_type') not in ['comptable', 'administrateur']:
+                return jsonify({
+                    'success': False,
+                    'message': 'Accès limité aux comptables et administrateurs'
+                }), 403
+            
+            if 'manage_accounting' not in claims.get('permissions', []):
+                return jsonify({
+                    'success': False,
+                    'message': 'Permissions comptables insuffisantes'
+                }), 403
+            
+            data = request.get_json()
+            
+            rubrique = RubriqueService.create_rubrique(
+                libelle=data.get('libelle'),
+                type_rubrique=data.get('type'),
+                mode_p=data.get('mode_p'),
+                valeur=float(data.get('valeur', 0))
+            )
+            
+            return jsonify({
+                'success': True,
+                'message': 'Rubrique créée avec succès',
+                'data': {
+                    'id': rubrique.id,
+                    'libelle': rubrique.libelle,
+                    'type': rubrique.type,
+                    'mode_p': rubrique.mode_p,
+                    'valeur': rubrique.valeur
+                }
+            }), 201
+            
+        except Exception as e:
+            return jsonify({
+                'success': False,
+                'message': str(e)
+            }), 400
+    
+    @staticmethod
+    def assign_rubrique_to_poste():
+        """Assigne une rubrique à un poste"""
+        try:
+            verify_jwt_in_request()
+            claims = get_jwt()
+            
+            # Vérification des permissions
+            if 'manage_accounting' not in claims.get('permissions', []):
+                return jsonify({
+                    'success': False,
+                    'message': 'Permissions comptables insuffisantes'
+                }), 403
+            
+            data = request.get_json()
+            
+            RubriqueService.assign_rubrique_to_poste(
+                poste_id=data.get('poste_id'),
+                rubrique_id=data.get('rubrique_id'),
+                montant=float(data.get('montant'))
+            )
+            
+            return jsonify({
+                'success': True,
+                'message': 'Rubrique assignée au poste avec succès'
+            })
+            
+        except Exception as e:
+            return jsonify({
+                'success': False,
+                'message': str(e)
+            }), 400
+    
+    @staticmethod
+    def get_poste_rubriques(poste_id):
+        """Récupère les rubriques d'un poste"""
+        try:
+            verify_jwt_in_request()
+            
+            rubriques = RubriqueService.get_poste_rubriques(poste_id)
+            
+            rubriques_data = []
+            for poste_rubrique in rubriques:
+                rubriques_data.append({
+                    'id': poste_rubrique.id,
+                    'rubrique': {
+                        'id': poste_rubrique.rubrique_ref.id,
+                        'libelle': poste_rubrique.rubrique_ref.libelle,
+                        'type': poste_rubrique.rubrique_ref.type,
+                        'mode_p': poste_rubrique.rubrique_ref.mode_p
+                    },
+                    'montant': poste_rubrique.montant,
+                    'date_creation': poste_rubrique.date_creation.isoformat(),
+                    'status': poste_rubrique.status
+                })
+            
+            return jsonify({
+                'success': True,
+                'data': rubriques_data
+            })
+            
+        except Exception as e:
+            return jsonify({
+                'success': False,
+                'message': str(e)
+            }), 400
+
+
+
+
+            
+            
+
+
+# === ROUTES MANQUANTES À AJOUTER AU BLUEPRINT PERSONNEL ===
+
+# Ajouter ces imports en haut du fichier routes existant :
+from .controllers import (
+    PersonnelController, CongeController, PayrollController, ReferentielController,
+    # NOUVEAUX IMPORTS À AJOUTER :
+    DocumentController, AbsenceController, ContratController, 
+    RubriqueController, PayrollControllerExtension
+)
+
+# === ROUTES GESTION DES DOCUMENTS ===
+
+@personnel_bp.route('/<int:personnel_id>/documents/upload', methods=['POST'])
+def upload_document(personnel_id):
+    """
+    Upload un document pour un personnel
+    Headers: Authorization: Bearer <token>
+    
+    Form Data:
+    - file: fichier à uploader
+    - libelle: string (libellé du document)
+    
+    Nécessite: permission 'manage_hr'
+    """
+    verify_jwt_in_request()
+    return DocumentController.upload_document(personnel_id)
+
+@personnel_bp.route('/<int:personnel_id>/documents', methods=['GET'])
+def get_personnel_documents(personnel_id):
+    """
+    Récupère tous les documents d'un personnel
+    Headers: Authorization: Bearer <token>
+    
+    Nécessite: permission 'view_personnel' ou 'manage_hr'
+    """
+    verify_jwt_in_request()
+    return DocumentController.get_personnel_documents(personnel_id)
+
+@personnel_bp.route('/documents/<int:document_id>/delete', methods=['DELETE'])
+def delete_document(document_id):
+    """
+    Supprime un document
+    Headers: Authorization: Bearer <token>
+    
+    Nécessite: permission 'manage_hr'
+    """
+    verify_jwt_in_request()
+    return DocumentController.delete_document(document_id)
+
+# === ROUTES GESTION DES ABSENCES ===
+
+@personnel_bp.route('/absences/create', methods=['POST'])
+def create_absence():
+    """
+    Enregistre une nouvelle absence
+    Headers: Authorization: Bearer <token>
+    
+    Body JSON:
+    {
+        "personnel_id": int,
+        "libelle": "string",
+        "date_debut": "YYYY-MM-DD",
+        "date_fin": "YYYY-MM-DD",
+        "motif": "string (optionnel)",
+        "justifiee": bool
+    }
+    
+    Nécessite: permission 'manage_hr'
+    """
+    verify_jwt_in_request()
+    return AbsenceController.create_absence()
+
+@personnel_bp.route('/absences/personnel/<int:personnel_id>', methods=['GET'])
+def get_absences_personnel(personnel_id):
+    """
+    Récupère les absences d'un personnel
+    Headers: Authorization: Bearer <token>
+    
+    Query Params:
+    - date_debut: YYYY-MM-DD (période de filtrage)
+    - date_fin: YYYY-MM-DD (période de filtrage)
+    
+    Nécessite: permission 'view_personnel' ou 'manage_hr'
+    """
+    verify_jwt_in_request()
+    return AbsenceController.get_absences_personnel(personnel_id)
+
+@personnel_bp.route('/absences/rapport', methods=['GET'])
+def get_rapport_absences():
+    """
+    Génère un rapport d'absences
+    Headers: Authorization: Bearer <token>
+    
+    Query Params:
+    - service_id: int (filtrer par service)
+    - mois_annee: string (format: YYYY-MM)
+    
+    Nécessite: permission 'manage_hr'
+    """
+    verify_jwt_in_request()
+    return AbsenceController.get_rapport_absences()
+
+# === ROUTES GESTION DES CONTRATS ===
+
+@personnel_bp.route('/contrats/create', methods=['POST'])
+def create_contrat():
+    """
+    Crée un nouveau contrat
+    Headers: Authorization: Bearer <token>
+    
+    Body JSON:
+    {
+        "personnel_id": int,
+        "type": "CDI|CDD|Stage|Consultant",
+        "date_debut": "YYYY-MM-DD",
+        "date_fin": "YYYY-MM-DD (optionnel pour CDI)",
+        "salaire_base": float
+    }
+    
+    Nécessite: permission 'manage_hr' ET user_type 'responsable_rh' ou 'administrateur'
+    """
+    verify_jwt_in_request()
+    claims = get_jwt()
+    
+    if claims.get('user_type') not in ['responsable_rh', 'administrateur']:
+        return jsonify({'error': 'Access restricted to HR managers and administrators'}), 403
+        
+    if 'manage_hr' not in claims.get('permissions', []):
+        return jsonify({'error': 'Insufficient HR permissions'}), 403
+    
+    return ContratController.create_contrat()
+
+@personnel_bp.route('/contrats/personnel/<int:personnel_id>', methods=['GET'])
+def get_contrats_personnel(personnel_id):
+    """
+    Récupère tous les contrats d'un personnel
+    Headers: Authorization: Bearer <token>
+    
+    Nécessite: permission 'view_personnel' ou 'manage_hr'
+    """
+    verify_jwt_in_request()
+    return ContratController.get_contrats_personnel(personnel_id)
+
+@personnel_bp.route('/contrats/expires', methods=['GET'])
+def get_contrats_expires():
+    """
+    Récupère les contrats qui arrivent à expiration (dans les 30 jours)
+    Headers: Authorization: Bearer <token>
+    
+    Nécessite: permission 'manage_hr'
+    """
+    verify_jwt_in_request()
+    claims = get_jwt()
+    
+    if 'manage_hr' not in claims.get('permissions', []):
+        return jsonify({'error': 'Insufficient HR permissions'}), 403
+    
+    return ContratController.get_contrats_expires()
+
+
+# === ROUTES GESTION DES RUBRIQUES DE PAIE ===
+
+@personnel_bp.route('/rubriques/create', methods=['POST'])
+def create_rubrique():
+    """
+    Crée une nouvelle rubrique de paie
+    Headers: Authorization: Bearer <token>
+    
+    Body JSON:
+    {
+        "libelle": "string",
+        "type": "gain|retenue|information",
+        "mode_p": "fixe|variable|%",
+        "valeur": float
+    }
+    
+    Nécessite: user_type 'comptable' ou 'administrateur' ET permission 'manage_accounting'
+    """
+    verify_jwt_in_request()
+    claims = get_jwt()
+    
+    if claims.get('user_type') not in ['comptable', 'administrateur']:
+        return jsonify({'error': 'Access restricted to accountants and administrators'}), 403
+        
+    if 'manage_accounting' not in claims.get('permissions', []):
+        return jsonify({'error': 'Insufficient accounting permissions'}), 403
+    
+    return RubriqueController.create_rubrique()
+
+@personnel_bp.route('/rubriques/assign-poste', methods=['POST'])
+def assign_rubrique_to_poste():
+    """
+    Assigne une rubrique à un poste
+    Headers: Authorization: Bearer <token>
+    
+    Body JSON:
+    {
+        "poste_id": int,
+        "rubrique_id": int,
+        "montant": float
+    }
+    
+    Nécessite: user_type 'comptable' ou 'administrateur' ET permission 'manage_accounting'
+    """
+    verify_jwt_in_request()
+    claims = get_jwt()
+    
+    if claims.get('user_type') not in ['comptable', 'administrateur']:
+        return jsonify({'error': 'Access restricted to accountants and administrators'}), 403
+        
+    if 'manage_accounting' not in claims.get('permissions', []):
+        return jsonify({'error': 'Insufficient accounting permissions'}), 403
+    
+    return RubriqueController.assign_rubrique_to_poste()
+
+@personnel_bp.route('/rubriques/poste/<int:poste_id>', methods=['GET'])
+def get_poste_rubriques(poste_id):
+    """
+    Récupère les rubriques assignées à un poste
+    Headers: Authorization: Bearer <token>
+    
+    Nécessite: permission 'manage_accounting' ou 'view_personnel'
+    """
+    verify_jwt_in_request()
+    return RubriqueController.get_poste_rubriques(poste_id)
+
+# === ROUTES PAIE SUPPLÉMENTAIRES ===
+
+@personnel_bp.route('/payroll/exercice/<int:exercice_id>/close', methods=['PUT'])
+def close_exercice(exercice_id):
+    """
+    Clôture un exercice comptable
+    Headers: Authorization: Bearer <token>
+    
+    Nécessite: user_type 'comptable' ou 'administrateur' ET permission 'manage_accounting'
+    """
+    verify_jwt_in_request()
+    claims = get_jwt()
+    
+    if claims.get('user_type') not in ['comptable', 'administrateur']:
+        return jsonify({'error': 'Access restricted to accountants and administrators'}), 403
+        
+    if 'manage_accounting' not in claims.get('permissions', []):
+        return jsonify({'error': 'Insufficient accounting permissions'}), 403
+    
+    return PayrollControllerExtension.close_exercice(exercice_id)
+
+# === ROUTES SPÉCIALISÉES SUPPLÉMENTAIRES ===
+
+@personnel_bp.route('/employee/profile', methods=['GET'])
+def employee_profile():
+    """
+    [EMPLOYÉ] Profil de l'employé connecté
+    Headers: Authorization: Bearer <token>
+    
+    Permet à un employé de voir ses propres informations
+    """
+    try:
+        verify_jwt_in_request()
+        user_id = get_jwt_identity()
+        claims = get_jwt()
+        
+        # Trouver le personnel associé à cet utilisateur
+        from .models import Personnel
+        personnel = Personnel.query.filter_by(user_id=user_id).first()
+        
+        if not personnel:
+            return jsonify({
+                'error': 'Aucun profil personnel trouvé pour cet utilisateur'
+            }), 404
+        
+        # Récupérer les détails
+        from .services import PersonnelService
+        details = PersonnelService.get_personnel_details(personnel.id)
+        
+        if not details:
+            return jsonify({'error': 'Détails du personnel introuvables'}), 404
+        
+        profile_data = {
+            'personnel': {
+                'matricule': details['personnel'].matricule,
+                'nom_complet': details['personnel'].nom_complet,
+                'service': details['service'].libelle,
+                'poste': details['poste'].fonction,
+                'date_embauche': details['personnel'].date_embauche.isoformat(),
+                'telephone': details['personnel'].telephone,
+                'adresse': details['personnel'].adresse
+            },
+            'contrat_actuel': details['contrat_actuel'].__dict__ if details['contrat_actuel'] else None,
+            'statistiques': details['statistiques']
+        }
+        
+        return jsonify({
+            'message': 'Employee profile retrieved',
+            'data': profile_data,
+            'username': claims.get('username')
+        }), 200
+        
+    except Exception as e:
+        return jsonify({'error': f'Profile retrieval failed: {str(e)}'}), 500
+
+@personnel_bp.route('/employee/conges', methods=['GET'])
+def employee_conges():
+    """
+    [EMPLOYÉ] Congés de l'employé connecté
+    Headers: Authorization: Bearer <token>
+    """
+    try:
+        verify_jwt_in_request()
+        user_id = get_jwt_identity()
+        
+        from .models import Personnel
+        personnel = Personnel.query.filter_by(user_id=user_id).first()
+        
+        if not personnel:
+            return jsonify({'error': 'Personnel profile not found'}), 404
+        
+        return CongeController.get_conges_personnel(personnel.id)
+        
+    except Exception as e:
+        return jsonify({'error': f'Failed to retrieve leaves: {str(e)}'}), 500
+
+@personnel_bp.route('/employee/bulletin/<int:exercice_id>', methods=['GET'])
+def employee_bulletin(exercice_id):
+    """
+    [EMPLOYÉ] Bulletin de paie de l'employé connecté
+    Headers: Authorization: Bearer <token>
+    """
+    try:
+        verify_jwt_in_request()
+        user_id = get_jwt_identity()
+        
+        from .models import Personnel
+        personnel = Personnel.query.filter_by(user_id=user_id).first()
+        
+        if not personnel:
+            return jsonify({'error': 'Personnel profile not found'}), 404
+        
+        return PayrollController.get_bulletin_paie(personnel.id, exercice_id)
+        
+    except Exception as e:
+        return jsonify({'error': f'Failed to retrieve payslip: {str(e)}'}), 500
+
+# === ROUTES ADMINISTRATIVES ===
+
+@personnel_bp.route('/admin/stats', methods=['GET'])
+def admin_stats():
+    """
+    [ADMINISTRATEUR] Statistiques globales du personnel
+    Headers: Authorization: Bearer <token>
+    
+    Nécessite: user_type='administrateur' ET niveau_acces='complet'
+    """
+    try:
+        verify_jwt_in_request()
+        claims = get_jwt()
+        
+        if claims.get('user_type') != 'administrateur' or claims.get('niveau_acces') != 'complet':
+            return jsonify({'error': 'Access restricted to administrators with full access'}), 403
+        
+        from .models import Personnel, Service, Poste, Conge, Absence, Contrat, Exercice
+        from core.database import db
+        
+        # Statistiques globales
+        stats = {
+            'personnel': {
+                'total': Personnel.query.count(),
+                'actifs': Personnel.query.filter_by(status='actif').count(),
+                'inactifs': Personnel.query.filter(Personnel.status != 'actif').count()
+            },
+            'structure': {
+                'services': Service.query.filter_by(status='actif').count(),
+                'postes': Poste.query.filter_by(status='actif').count()
+            },
+            'conges': {
+                'en_attente': Conge.query.filter_by(status='demande').count(),
+                'approuves': Conge.query.filter_by(status='approuve').count(),
+                'rejetes': Conge.query.filter_by(status='rejete').count()
+            },
+            'absences': {
+                'total_ce_mois': Absence.query.filter(
+                    db.extract('month', Absence.date_debut) == datetime.now().month
+                ).count()
+            },
+            'contrats': {
+                'actifs': Contrat.query.filter_by(status='actif').count(),
+                'expires_bientot': len(ContratService.get_contrats_expires())
+            },
+            'paie': {
+                'exercices_ouverts': Exercice.query.filter_by(status='ouvert').count(),
+                'exercices_clos': Exercice.query.filter_by(status='clos').count()
+            }
+        }
+        
+        return jsonify({
+            'message': 'Global personnel statistics',
+            'stats': stats,
+            'admin': claims.get('username'),
+            'timestamp': datetime.utcnow().isoformat()
+        }), 200
+        
+    except Exception as e:
+        return jsonify({'error': f'Admin stats failed: {str(e)}'}), 500
+
+# === ROUTES D'EXPORT ET REPORTING ===
+
+@personnel_bp.route('/export/personnel-list', methods=['GET'])
+def export_personnel_list():
+    """
+    Export de la liste du personnel (CSV/Excel)
+    Headers: Authorization: Bearer <token>
+    
+    Query Params:
+    - format: csv|excel (défaut: csv)
+    - service_id: int (filt`re par service, optionnel)
+    
+    Nécessite: permission 'manage_hr' ou 'view_personnel'
+    """
+    verify_jwt_in_request()
+    claims = get_jwt()
+    
+    if 'manage_hr' not in claims.get('permissions', []) and 'view_personnel' not in claims.get('permissions', []):
+        return jsonify({'error': 'Insufficient permissions'}), 403
+    
+    format_export = request.args.get('format', 'csv')
+    service_id = request.args.get('service_id', type=int)
+    
+    return PersonnelController.export_personnel_list(format_export, service_id)
+
+@personnel_bp.route('/export/absences-report', methods=['GET'])
