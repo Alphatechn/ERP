@@ -1,83 +1,29 @@
 from flask import Flask, jsonify
 from config import Config
 from core.database import db
-from core.extensions import jwt, cors
-from modules.auth.routes import extended_auth_bp
-from modules.auth.services import ExtendedAuthService
+from core.extensions import jwt, cors, setup_jwt_callbacks
+from modules.auth.routes import auth_bp
 from modules.rh.routes import personnel_bp
+from modules.auth.services import ExtendedAuthService
+from core.swagger_config import init_swagger
 
 def create_app(config_class=Config):
     app = Flask(__name__)
     app.config.from_object(config_class)
-    
     print("Configuration de l'application...")
     
+    # Initialiser Swagger
+    swagger = init_swagger(app)
+    print("Swagger initialisé - Documentation disponible sur /docs/")
+
+
     # Initialiser les extensions
     db.init_app(app)
     jwt.init_app(app)
     cors.init_app(app)
-
-    def setup_jwt_callbacks(app, jwt):
-        """Configuration complète des callbacks JWT"""
     
-    @jwt.token_in_blocklist_loader
-    def check_if_token_revoked(jwt_header, jwt_payload):
-        """Vérifie si un token est dans la blacklist"""
-        try:
-            jti = jwt_payload.get('jti')
-            if not jti:
-                return False
-            
-            # Importer ici pour éviter les imports circulaires
-            from modules.auth.services import ExtendedAuthService
-            is_revoked = ExtendedAuthService.is_token_revoked(jti)
-            
-            if is_revoked:
-                print(f"🚫 Token {jti[:8]}... est révoqué")
-            
-            return is_revoked
-            
-        except Exception as e:
-            print(f"❌ Erreur check_revoked: {str(e)}")
-            return False  # En cas d'erreur, ne pas bloquer
-    
-    @jwt.revoked_token_loader
-    def revoked_token_callback(jwt_header, jwt_payload):
-        """Appelé quand un token révoqué est utilisé"""
-        jti = jwt_payload.get('jti', 'unknown')
-        print(f"🚫 Tentative d'usage d'un token révoqué: {jti[:8]}...")
-        
-        return jsonify({
-            'error': 'Token has been revoked',
-            'message': 'Please login again to get a new token'
-        }), 401
-    
-    @jwt.expired_token_loader
-    def expired_token_callback(jwt_header, jwt_payload):
-        """Appelé quand un token expiré est utilisé"""
-        return jsonify({
-            'error': 'Token has expired',
-            'message': 'Please login again to get a new token'
-        }), 401
-    
-    @jwt.invalid_token_loader
-    def invalid_token_callback(error_string):
-        """Appelé quand le token est malformé"""
-        print(f"🚫 Token invalide: {error_string}")
-        return jsonify({
-            'error': 'Invalid token format',
-            'message': 'Please provide a valid token'
-        }), 401
-    
-    @jwt.unauthorized_loader
-    def missing_token_callback(error_string):
-        """Appelé quand aucun token n'est fourni"""
-        return jsonify({
-            'error': 'Authorization token required',
-            'message': 'Please provide a valid token in Authorization header'
-        }), 401
-
-    
+    # Configurer les callbacks JWT
+    setup_jwt_callbacks(jwt)
     print("Extensions initialisées")
     
     # Route de test
@@ -85,12 +31,42 @@ def create_app(config_class=Config):
     def index():
         return jsonify({
             'message': 'ERP Backend API is running!',
-            'version': '1.0.0',
-            'endpoints': ['/api/auth/register', '/api/auth/login']
+            'version': '2.0.0',
+            'framework': 'Flask-RESTful + Flasgger',
+            'documentation': {
+                'swagger_ui': '/docs/',
+                'api_spec': '/apispec.json'
+            },
+            'endpoints': {
+                'auth': '/api/auth/',
+                'health': '/api/auth/health',
+                'admin': '/api/auth/admin/',
+                'hr': '/api/auth/hr/',
+                'warehouse': '/api/auth/warehouse/',
+                'accounting': '/api/auth/accounting/'
+            },
+            'features': [
+                'JWT Authentication with extended user types',
+                'Role-based permissions',
+                'Swagger/OpenAPI documentation',
+                'Multi-user type support (admin, hr, warehouse, accounting)'
+            ]
         })
+
+    # Route spécifique pour rediriger vers la documentation
+    @app.route('/documentation')
+    def documentation():
+        return jsonify({
+            'message': 'API Documentation available',
+            'swagger_ui': '/docs/',
+            'api_spec': '/apispec.json',
+            'instructions': 'Visit /docs/ for interactive API documentation'
+        })
+
+
     
     # Enregistrer les blueprints
-    app.register_blueprint(extended_auth_bp)
+    app.register_blueprint(auth_bp)
     app.register_blueprint(personnel_bp)
     print("Blueprints enregistrés")
     
@@ -102,8 +78,7 @@ def create_app(config_class=Config):
             print("Tables créées avec succès")
             
             # Initialiser les rôles et permissions par défaut
-            ExtendedAuthService.init_default_roles_and_permissions()
-            
+            ExtendedAuthService.init_extended_roles_and_permissions()
         except Exception as e:
             print(f"Erreur lors de l'initialisation de la DB: {e}")
     
@@ -114,5 +89,10 @@ def create_app(config_class=Config):
 app = create_app()
 
 if __name__ == '__main__':
-    print("Démarrage du serveur Flask...")
+    print("=" * 50)
+    print("🚀 Démarrage du serveur ERP Flask...")
+    print("📚 Documentation Swagger: http://localhost:5000/docs/")
+    print("🏠 Page d'accueil: http://localhost:5000/")
+    print("🔐 Authentification: http://localhost:5000/api/auth/")
+    print("=" * 50)
     app.run(debug=True, host='0.0.0.0', port=5000)

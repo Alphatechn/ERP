@@ -1,831 +1,948 @@
-from flask import Blueprint, jsonify
-from .controllers import (
-    PersonnelController, CongeController, PayrollController, ReferentielController, DocumentController, AbsenceController, ContratController, 
-    RubriqueController
+from flask import Blueprint
+from flask_restful import Api
+from flasgger import swag_from
+from .resources import (
+    PersonnelResource, PersonnelDetailResource, CongeResource, CongeApproveResource,
+    CongeRejectResource, PersonnelCongesResource, PayrollExerciceResource,
+    PayrollProcessResource, BulletinPaieResource, ReferentielServicesResource,
+    ReferentielPostesResource, ReferentielExercicesResource, ReferentielRubriquesResource,
+    DocumentResource, DocumentDeleteResource, AbsenceResource, PersonnelAbsencesResource,
+    RapportAbsencesResource, ContratResource, PersonnelContratsResource,
+    ContratsExpiresResource, RubriqueResource, AssignRubriqueResource,
+    PosteRubriquesResource, HRDashboardResource, AccountingDashboardResource,
+    HealthResource, TestPermissionsResource
 )
-from flask_jwt_extended import verify_jwt_in_request, get_jwt, get_jwt_identity
-from datetime import datetime
+
+# Configuration Swagger pour le module RH
+swagger_config = {
+    "swagger": "2.0",
+    "info": {
+        "title": "API Gestion du Personnel et Paie",
+        "description": """
+API complète pour la gestion des ressources humaines et de la paie.
+
+## Fonctionnalités principales :
+- **Gestion du personnel** : CRUD, fiches personnels, matricules
+- **Gestion des congés** : Demandes, approbations, rejets
+- **Gestion des absences** : Enregistrement et suivi  
+- **Gestion des contrats** : CDI/CDD, renouvellements, alertes
+- **Système de paie** : Exercices, bulletins, rubriques
+- **Documents** : Upload et gestion des fichiers
+- **Rapports** : Dashboards RH et comptable
+
+## Authentification
+Toutes les routes protégées nécessitent un token JWT dans le header :
+```
+Authorization: Bearer <votre_token_jwt>
+```
+
+## Permissions
+- `view_personnel` : Consultation des données personnel
+- `manage_hr` : Gestion complète RH
+- `manage_accounting` : Gestion de la paie et comptabilité
+        """,
+        "version": "1.0.0",
+        "contact": {
+            "name": "Support API",
+            "email": "support@entreprise.com"
+        }
+    },
+    "host": "localhost:5000",
+    "basePath": "/api/personnel",
+    "schemes": ["http", "https"],
+    "securityDefinitions": {
+        "JWT": {
+            "type": "apiKey",
+            "name": "Authorization",
+            "in": "header",
+            "description": "Token JWT au format: Bearer <token>"
+        }
+    },
+    "security": [{"JWT": []}],
+    "tags": [
+        {
+            "name": "Personnel",
+            "description": "Gestion du personnel et employés"
+        },
+        {
+            "name": "Congés",
+            "description": "Gestion des demandes de congés"
+        },
+        {
+            "name": "Absences", 
+            "description": "Gestion des absences du personnel"
+        },
+        {
+            "name": "Contrats",
+            "description": "Gestion des contrats de travail"
+        },
+        {
+            "name": "Documents",
+            "description": "Gestion des documents personnel"
+        },
+        {
+            "name": "Paie",
+            "description": "Système de paie et bulletins"
+        },
+        {
+            "name": "Rubriques",
+            "description": "Gestion des rubriques de paie"
+        },
+        {
+            "name": "Référentiels",
+            "description": "Services, postes, exercices"
+        },
+        {
+            "name": "Dashboards",
+            "description": "Tableaux de bord et statistiques"
+        },
+        {
+            "name": "System",
+            "description": "Santé et tests du système"
+        }
+    ]
+}
+
+# Définitions des modèles réutilisables
+swagger_definitions = {
+    "PersonnelBase": {
+        "type": "object",
+        "required": ["nom", "prenom", "date_embauche", "service_id", "poste_id"],
+        "properties": {
+            "matricule": {"type": "string", "description": "Matricule unique"},
+            "nom": {"type": "string", "description": "Nom de famille"},
+            "prenom": {"type": "string", "description": "Prénom"},
+            "civilite": {"type": "string", "enum": ["M.", "Mme", "Mlle"]},
+            "sexe": {"type": "string", "enum": ["M", "F"]},
+            "telephone": {"type": "string"},
+            "adresse": {"type": "string"},
+            "categorie": {"type": "string", "description": "Cadre, Employé, Ouvrier..."},
+            "date_embauche": {"type": "string", "format": "date"},
+            "service_id": {"type": "integer"},
+            "poste_id": {"type": "integer"}
+        }
+    },
+    "PersonnelResponse": {
+        "type": "object",
+        "properties": {
+            "id": {"type": "integer"},
+            "matricule": {"type": "string"},
+            "nom_complet": {"type": "string"},
+            "service": {"type": "string"},
+            "poste": {"type": "string"},
+            "categorie": {"type": "string"},
+            "date_embauche": {"type": "string", "format": "date"},
+            "status": {"type": "string"}
+        }
+    },
+    "CongeRequest": {
+        "type": "object",
+        "required": ["personnel_id", "type_conge", "date_debut", "date_fin"],
+        "properties": {
+            "personnel_id": {"type": "integer"},
+            "type_conge": {"type": "string", "description": "Annuel, Maladie, Maternité..."},
+            "date_debut": {"type": "string", "format": "date"},
+            "date_fin": {"type": "string", "format": "date"}
+        }
+    },
+    "ContratRequest": {
+        "type": "object", 
+        "required": ["personnel_id", "type", "date_debut", "salaire_base"],
+        "properties": {
+            "personnel_id": {"type": "integer"},
+            "type": {"type": "string", "enum": ["CDI", "CDD", "Stage", "Consultant"]},
+            "date_debut": {"type": "string", "format": "date"},
+            "date_fin": {"type": "string", "format": "date"},
+            "salaire_base": {"type": "number", "format": "float"}
+        }
+    },
+    "RubriqueRequest": {
+        "type": "object",
+        "required": ["libelle", "type", "mode_p", "valeur"],
+        "properties": {
+            "libelle": {"type": "string"},
+            "type": {"type": "string", "enum": ["gain", "retenue", "information"]},
+            "mode_p": {"type": "string", "enum": ["fixe", "variable", "%"]},
+            "valeur": {"type": "number", "format": "float"}
+        }
+    },
+    "StandardResponse": {
+        "type": "object",
+        "properties": {
+            "success": {"type": "boolean"},
+            "message": {"type": "string"},
+            "data": {"type": "object"}
+        }
+    },
+    "ErrorResponse": {
+        "type": "object",
+        "properties": {
+            "error": {"type": "string"}
+        }
+    }
+}
 
 personnel_bp = Blueprint('personnel', __name__, url_prefix='/api/personnel')
+api = Api(personnel_bp)
 
+# Ajouter les définitions Swagger
+personnel_bp.swagger_config = swagger_config
+personnel_bp.swagger_definitions = swagger_definitions
 
-# === ROUTES BASIQUES PERSONNEL ===
+# === SPÉCIFICATIONS SWAGGER POUR CHAQUE ENDPOINT ===
 
-@personnel_bp.route('/create', methods=['POST'])
-def create_personnel():
-    """
-    Crée un nouveau personnel
-    Headers: Authorization: Bearer <token>
-    
-    Body JSON:
-    {
-        "matricule": "string (optionnel)",
-        "nom": "string",
-        "prenom": "string", 
-        "civilite": "M.|Mme|Mlle",
-        "sexe": "M|F",
-        "telephone": "string",
-        "adresse": "string",
-        "categorie": "string",
-        "date_embauche": "YYYY-MM-DD",
-        "service_id": int,
-        "poste_id": int,
-        // Options pour création compte utilisateur:
-        "create_user_account": bool,
-        "user_data": {
-            "username": "string",
-            "email": "string", 
-            "password": "string",
-            "role": "string",
-            "user_type": "string"
-        },
-        "contrat_data": {
-            "type": "CDI|CDD|Stage|Consultant",
-            "date_debut": "YYYY-MM-DD",
-            "date_fin": "YYYY-MM-DD (optionnel)",
-            "salaire_base": float
-        }
-    }
-    
-    Nécessite: permission 'manage_hr'
-    """
-    return PersonnelController.create_personnel()
+# Personnel CRUD
+PersonnelResource.post.__doc__ = """
+Créer un nouveau personnel
+---
+tags:
+  - Personnel
+summary: Créer un nouveau personnel
+description: Crée un nouveau personnel avec possibilité de créer un compte utilisateur et un contrat
+security:
+  - JWT: []
+parameters:
+  - in: body
+    name: personnel_data
+    required: true
+    schema:
+      allOf:
+        - type: object
+          properties:
+            create_user_account:
+              type: boolean
+              default: false
+              description: Créer un compte utilisateur associé
+            user_data:
+              type: object
+              properties:
+                username: {type: string}
+                email: {type: string, format: email}
+                password: {type: string}
+                role: {type: string, default: "user"}
+            contrat_data:
+              $ref: '#/definitions/ContratRequest'
+responses:
+  201:
+    description: Personnel créé avec succès
+    schema:
+      $ref: '#/definitions/StandardResponse'
+  400:
+    description: Données invalides
+    schema:
+      $ref: '#/definitions/ErrorResponse'
+  500:
+    description: Erreur serveur
+    schema:
+      $ref: '#/definitions/ErrorResponse'
+"""
 
-@personnel_bp.route('/list', methods=['GET'])
-def get_personnel_list():
-    verify_jwt_in_request()
-    """
-    Récupère la liste du personnel avec filtres et pagination
-    Headers: Authorization: Bearer <token>
-    
-    Query Params:
-    - service_id: int (filtrer par service)
-    - poste_id: int (filtrer par poste)
-    - status: string (actif, congé, suspendu, démissionné)
-    - categorie: string (Cadre, Employé, Ouvrier)
-    - search: string (recherche nom, prénom, matricule)
-    - page: int (défaut: 1)
-    - per_page: int (défaut: 20)
-    
-    Nécessite: permission 'view_personnel' ou 'manage_hr'
-    """
-    return PersonnelController.get_personnel_list()
+PersonnelResource.get.__doc__ = """
+Lister le personnel avec filtres
+---
+tags:
+  - Personnel
+summary: Obtenir la liste du personnel
+description: Récupère la liste du personnel avec possibilité de filtrage et pagination
+security:
+  - JWT: []
+parameters:
+  - in: query
+    name: service_id
+    type: integer
+    description: Filtrer par service
+  - in: query
+    name: poste_id
+    type: integer
+    description: Filtrer par poste
+  - in: query
+    name: status
+    type: string
+    description: Filtrer par statut
+  - in: query
+    name: categorie
+    type: string
+    description: Filtrer par catégorie
+  - in: query
+    name: search
+    type: string
+    description: Recherche par nom, prénom ou matricule
+  - in: query
+    name: page
+    type: integer
+    default: 1
+    description: Numéro de page
+  - in: query
+    name: per_page
+    type: integer
+    default: 20
+    description: Éléments par page
+responses:
+  200:
+    description: Liste du personnel récupérée
+    schema:
+      type: object
+      properties:
+        success: {type: boolean}
+        data:
+          type: array
+          items:
+            $ref: '#/definitions/PersonnelResponse'
+        pagination:
+          type: object
+          properties:
+            total: {type: integer}
+            pages: {type: integer}
+            current_page: {type: integer}
+            per_page: {type: integer}
+"""
 
-@personnel_bp.route('/<int:personnel_id>', methods=['GET'])
-def get_personnel_details(personnel_id):
-    """
-    Récupère les détails complets d'un personnel
-    Headers: Authorization: Bearer <token>
-    
-    Retourne: Informations personnelles, contrat actuel, service, poste, statistiques
-    
-    Nécessite: permission 'view_personnel' ou 'manage_hr'
-    """
-    return PersonnelController.get_personnel_details(personnel_id)
+PersonnelDetailResource.get.__doc__ = """
+Détails d'un personnel
+---
+tags:
+  - Personnel
+summary: Obtenir les détails d'un personnel
+security:
+  - JWT: []
+parameters:
+  - in: path
+    name: personnel_id
+    type: integer
+    required: true
+    description: ID du personnel
+responses:
+  200:
+    description: Détails du personnel
+    schema:
+      $ref: '#/definitions/StandardResponse'
+  404:
+    description: Personnel introuvable
+"""
 
-@personnel_bp.route('/<int:personnel_id>/update', methods=['PUT'])
-def update_personnel(personnel_id):
-    """
-    Met à jour les informations d'un personnel
-    Headers: Authorization: Bearer <token>
-    
-    Body JSON: Champs à mettre à jour (nom, prenom, civilite, sexe, telephone, 
-               adresse, categorie, service_id, poste_id, status)
-    
-    Nécessite: permission 'manage_hr'
-    """
-    return PersonnelController.update_personnel(personnel_id)
+PersonnelDetailResource.put.__doc__ = """
+Mettre à jour un personnel
+---
+tags:
+  - Personnel
+summary: Modifier les informations d'un personnel
+security:
+  - JWT: []
+parameters:
+  - in: path
+    name: personnel_id
+    type: integer
+    required: true
+  - in: body
+    name: update_data
+    schema:
+      $ref: '#/definitions/PersonnelBase'
+responses:
+  200:
+    description: Personnel mis à jour
+    schema:
+      $ref: '#/definitions/StandardResponse'
+"""
 
-@personnel_bp.route('/<int:personnel_id>/delete', methods=['DELETE'])
-def delete_personnel(personnel_id):
-    """
-    Supprime un personnel (soft delete)
-    Headers: Authorization: Bearer <token>
-    
-    Nécessite: permission 'manage_hr' ET niveau_acces 'complet' (administrateur)
-    """
-    return PersonnelController.delete_personnel(personnel_id)
+PersonnelDetailResource.delete.__doc__ = """
+Supprimer un personnel
+---
+tags:
+  - Personnel
+summary: Supprimer un personnel (soft delete)
+security:
+  - JWT: []
+parameters:
+  - in: path
+    name: personnel_id
+    type: integer
+    required: true
+responses:
+  200:
+    description: Personnel supprimé
+    schema:
+      $ref: '#/definitions/StandardResponse'
+"""
 
+# Congés
+CongeResource.post.__doc__ = """
+Créer une demande de congé
+---
+tags:
+  - Congés
+summary: Créer une nouvelle demande de congé
+security:
+  - JWT: []
+parameters:
+  - in: body
+    name: conge_data
+    required: true
+    schema:
+      $ref: '#/definitions/CongeRequest'
+responses:
+  201:
+    description: Demande de congé créée
+    schema:
+      $ref: '#/definitions/StandardResponse'
+"""
 
-# === ROUTES GESTION DES DOCUMENTS ===
+CongeApproveResource.put.__doc__ = """
+Approuver un congé
+---
+tags:
+  - Congés
+summary: Approuver une demande de congé
+security:
+  - JWT: []
+parameters:
+  - in: path
+    name: conge_id
+    type: integer
+    required: true
+responses:
+  200:
+    description: Congé approuvé
+"""
 
-@personnel_bp.route('/<int:personnel_id>/documents/upload', methods=['POST'])
-def upload_document(personnel_id):
-    """
-    Upload un document pour un personnel
-    Headers: Authorization: Bearer <token>
-    
-    Form Data:
-    - file: fichier à uploader
-    - libelle: string (libellé du document)
-    
-    Nécessite: permission 'manage_hr'
-    """
-    verify_jwt_in_request()
-    return DocumentController.upload_document(personnel_id)
+CongeRejectResource.put.__doc__ = """
+Rejeter un congé
+---
+tags:
+  - Congés
+summary: Rejeter une demande de congé
+security:
+  - JWT: []
+parameters:
+  - in: path
+    name: conge_id
+    type: integer
+    required: true
+  - in: body
+    name: reject_data
+    schema:
+      type: object
+      properties:
+        motif: {type: string, description: "Motif du rejet"}
+responses:
+  200:
+    description: Congé rejeté
+"""
 
-@personnel_bp.route('/<int:personnel_id>/documents', methods=['GET'])
-def get_personnel_documents(personnel_id):
-    """
-    Récupère tous les documents d'un personnel
-    Headers: Authorization: Bearer <token>
-    
-    Nécessite: permission 'view_personnel' ou 'manage_hr'
-    """
-    verify_jwt_in_request()
-    return DocumentController.get_personnel_documents(personnel_id)
+PersonnelCongesResource.get.__doc__ = """
+Congés d'un personnel
+---
+tags:
+  - Congés
+summary: Obtenir les congés d'un personnel
+security:
+  - JWT: []
+parameters:
+  - in: path
+    name: personnel_id
+    type: integer
+    required: true
+  - in: query
+    name: annee
+    type: integer
+    description: Filtrer par année
+responses:
+  200:
+    description: Liste des congés du personnel
+"""
 
-@personnel_bp.route('/documents/<int:document_id>/delete', methods=['DELETE'])
-def delete_document(document_id):
-    """
-    Supprime un document
-    Headers: Authorization: Bearer <token>
-    
-    Nécessite: permission 'manage_hr'
-    """
-    verify_jwt_in_request()
-    return DocumentController.delete_document(document_id)
+# Paie
+PayrollExerciceResource.post.__doc__ = """
+Créer un exercice de paie
+---
+tags:
+  - Paie
+summary: Créer un nouvel exercice comptable
+security:
+  - JWT: []
+parameters:
+  - in: body
+    name: exercice_data
+    required: true
+    schema:
+      type: object
+      required: [mois_annee]
+      properties:
+        mois_annee: {type: string, example: "2024-01"}
+responses:
+  201:
+    description: Exercice créé
+"""
 
+PayrollProcessResource.post.__doc__ = """
+Traiter la paie
+---
+tags:
+  - Paie
+summary: Traiter la paie pour un exercice
+description: Lance le processus de calcul et génération des bulletins de paie
+security:
+  - JWT: []
+parameters:
+  - in: body
+    name: payroll_data
+    required: true
+    schema:
+      type: object
+      required: [exercice_id]
+      properties:
+        exercice_id: {type: integer}
+        personnel_ids: 
+          type: array
+          items: {type: integer}
+          description: "IDs du personnel à traiter (tous si omis)"
+responses:
+  200:
+    description: Traitement de paie terminé
+    schema:
+      type: object
+      properties:
+        success: {type: boolean}
+        message: {type: string}
+        data:
+          type: object
+          properties:
+            total_processed: {type: integer}
+            total_amount: {type: number}
+            success: {type: array}
+            errors: {type: array}
+"""
 
-# === ROUTES GESTION DES CONGÉS ===
+BulletinPaieResource.get.__doc__ = """
+Bulletin de paie
+---
+tags:
+  - Paie
+summary: Obtenir un bulletin de paie
+security:
+  - JWT: []
+parameters:
+  - in: path
+    name: personnel_id
+    type: integer
+    required: true
+  - in: path
+    name: exercice_id
+    type: integer
+    required: true
+responses:
+  200:
+    description: Bulletin de paie
+    schema:
+      type: object
+      properties:
+        success: {type: boolean}
+        data:
+          type: object
+          properties:
+            personnel: {type: object}
+            exercice: {type: object}
+            lignes: {type: array}
+            totaux:
+              type: object
+              properties:
+                total_gains: {type: number}
+                total_retenues: {type: number}
+                net_payer: {type: number}
+  404:
+    description: Bulletin introuvable
+"""
 
-@personnel_bp.route('/conges/create', methods=['POST'])
-def create_conge():
-    verify_jwt_in_request()
-    """
-    Crée une nouvelle demande de congé
-    Headers: Authorization: Bearer <token>
-    
-    Body JSON:
-    {
-        "personnel_id": int,
-        "type_conge": "string (Annuel, Maladie, Maternité, etc.)",
-        "date_debut": "YYYY-MM-DD",
-        "date_fin": "YYYY-MM-DD"
-    }
-    
-    Nécessite: permission 'manage_hr' ou utilisateur peut créer sa propre demande
-    """
-    return CongeController.create_conge()
+# Références
+ReferentielServicesResource.get.__doc__ = """
+Liste des services
+---
+tags:
+  - Référentiels
+summary: Obtenir tous les services actifs
+responses:
+  200:
+    description: Liste des services
+    schema:
+      type: object
+      properties:
+        success: {type: boolean}
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              id: {type: integer}
+              libelle: {type: string}
+              status: {type: string}
+"""
 
-@personnel_bp.route('/conges/<int:conge_id>/approve', methods=['PUT'])
-def approve_conge(conge_id):
-    """
-    Approuve une demande de congé
-    Headers: Authorization: Bearer <token>
-    
-    Nécessite: permission 'manage_hr' ET user_type 'responsable_rh' ou 'administrateur'
-    """
-    return CongeController.approve_conge(conge_id)
+ReferentielPostesResource.get.__doc__ = """
+Liste des postes
+---
+tags:
+  - Référentiels
+summary: Obtenir tous les postes actifs
+responses:
+  200:
+    description: Liste des postes
+"""
 
-@personnel_bp.route('/conges/<int:conge_id>/reject', methods=['PUT'])
-def reject_conge(conge_id):
-    """
-    Rejette une demande de congé
-    Headers: Authorization: Bearer <token>
-    
-    Body JSON:
-    {
-        "motif": "string (optionnel)"
-    }
-    
-    Nécessite: permission 'manage_hr' ET user_type 'responsable_rh' ou 'administrateur'
-    """
-    return CongeController.reject_conge(conge_id)
+ReferentielExercicesResource.get.__doc__ = """
+Liste des exercices
+---
+tags:
+  - Référentiels
+summary: Obtenir tous les exercices comptables
+responses:
+  200:
+    description: Liste des exercices
+"""
 
-@personnel_bp.route('/conges/personnel/<int:personnel_id>', methods=['GET'])
-def get_conges_personnel(personnel_id):
-    """
-    Récupère les congés d'un personnel
-    Headers: Authorization: Bearer <token>
-    
-    Query Params:
-    - annee: int (filtrer par année)
-    
-    Nécessite: permission 'view_personnel' ou utilisateur peut voir ses propres congés
-    """
-    return CongeController.get_conges_personnel(personnel_id)
+ReferentielRubriquesResource.get.__doc__ = """
+Liste des rubriques
+---
+tags:
+  - Référentiels
+summary: Obtenir les rubriques de paie
+parameters:
+  - in: query
+    name: type
+    type: string
+    enum: [gain, retenue, information]
+    description: Filtrer par type de rubrique
+responses:
+  200:
+    description: Liste des rubriques
+"""
 
-@personnel_bp.route('/conges/pending', methods=['GET'])
-def get_conges_en_attente():
-    """
-    Récupère toutes les demandes de congé en attente
-    Headers: Authorization: Bearer <token>
-    
-    Nécessite: permission 'manage_hr' ET user_type 'responsable_rh' ou 'administrateur'
-    """
-    try:
-        verify_jwt_in_request()
-        claims = get_jwt()
-        
-        # Vérification des permissions
-        if claims.get('user_type') not in ['responsable_rh', 'administrateur']:
-            return jsonify({'error': 'Access restricted to HR managers and administrators'}), 403
-            
-        if 'manage_hr' not in claims.get('permissions', []):
-            return jsonify({'error': 'Insufficient HR permissions'}), 403
-        
-        from .services import CongeService
-        conges = CongeService.get_conges_en_attente()
-        
-        conges_data = []
-        for conge in conges:
-            conges_data.append({
-                'id': conge.id,
-                'personnel': {
-                    'id': conge.personnel_ref.id,
-                    'matricule': conge.personnel_ref.matricule,
-                    'nom_complet': conge.personnel_ref.nom_complet,
-                    'service': conge.personnel_ref.service_ref.libelle
-                },
-                'type_conge': conge.type_conge,
-                'date_debut': conge.date_debut.isoformat(),
-                'date_fin': conge.date_fin.isoformat(),
-                'nb_jours': conge.nb_jours,
-                'status': conge.status
-            })
-        
-        return jsonify({
-            'success': True,
-            'message': f'{len(conges_data)} demandes en attente',
-            'data': conges_data,
-            'reviewed_by': claims.get('username')
-        }), 200
-        
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': f'Failed to retrieve pending leave requests: {str(e)}'
-        }), 500
+# Documents
+DocumentResource.post.__doc__ = """
+Upload de document
+---
+tags:
+  - Documents
+summary: Uploader un document pour un personnel
+security:
+  - JWT: []
+consumes:
+  - multipart/form-data
+parameters:
+  - in: path
+    name: personnel_id
+    type: integer
+    required: true
+  - in: formData
+    name: file
+    type: file
+    required: true
+    description: Fichier à uploader
+  - in: formData
+    name: libelle
+    type: string
+    required: true
+    description: Libellé du document
+responses:
+  201:
+    description: Document uploadé avec succès
+"""
 
-# === ROUTES GESTION DES ABSENCES ===
+DocumentResource.get.__doc__ = """
+Documents d'un personnel
+---
+tags:
+  - Documents
+summary: Obtenir tous les documents d'un personnel
+security:
+  - JWT: []
+parameters:
+  - in: path
+    name: personnel_id
+    type: integer
+    required: true
+responses:
+  200:
+    description: Liste des documents
+"""
 
-@personnel_bp.route('/absences/create', methods=['POST'])
-def create_absence():
-    """
-    Enregistre une nouvelle absence
-    Headers: Authorization: Bearer <token>
-    
-    Body JSON:
-    {
-        "personnel_id": int,
-        "libelle": "string",
-        "date_debut": "YYYY-MM-DD",
-        "date_fin": "YYYY-MM-DD",
-        "motif": "string (optionnel)",
-        "justifiee": bool
-    }
-    
-    Nécessite: permission 'manage_hr'
-    """
-    verify_jwt_in_request()
-    return AbsenceController.create_absence()
+# Absences
+AbsenceResource.post.__doc__ = """
+Enregistrer une absence
+---
+tags:
+  - Absences
+summary: Enregistrer une nouvelle absence
+security:
+  - JWT: []
+parameters:
+  - in: body
+    name: absence_data
+    required: true
+    schema:
+      type: object
+      required: [personnel_id, libelle, date_debut, date_fin]
+      properties:
+        personnel_id: {type: integer}
+        libelle: {type: string}
+        date_debut: {type: string, format: date}
+        date_fin: {type: string, format: date}
+        motif: {type: string}
+        justifiee: {type: boolean, default: false}
+responses:
+  201:
+    description: Absence enregistrée
+"""
 
-@personnel_bp.route('/absences/personnel/<int:personnel_id>', methods=['GET'])
-def get_absences_personnel(personnel_id):
-    """
-    Récupère les absences d'un personnel
-    Headers: Authorization: Bearer <token>
-    
-    Query Params:
-    - date_debut: YYYY-MM-DD (période de filtrage)
-    - date_fin: YYYY-MM-DD (période de filtrage)
-    
-    Nécessite: permission 'view_personnel' ou 'manage_hr'
-    """
-    verify_jwt_in_request()
-    return AbsenceController.get_absences_personnel(personnel_id)
+PersonnelAbsencesResource.get.__doc__ = """
+Absences d'un personnel
+---
+tags:
+  - Absences
+summary: Obtenir les absences d'un personnel
+security:
+  - JWT: []
+parameters:
+  - in: path
+    name: personnel_id
+    type: integer
+    required: true
+  - in: query
+    name: date_debut
+    type: string
+    format: date
+  - in: query
+    name: date_fin
+    type: string
+    format: date
+responses:
+  200:
+    description: Liste des absences
+"""
 
-@personnel_bp.route('/absences/rapport', methods=['GET'])
-def get_rapport_absences():
-    """
-    Génère un rapport d'absences
-    Headers: Authorization: Bearer <token>
-    
-    Query Params:
-    - service_id: int (filtrer par service)
-    - mois_annee: string (format: YYYY-MM)
-    
-    Nécessite: permission 'manage_hr'
-    """
-    verify_jwt_in_request()
-    return AbsenceController.get_rapport_absences()
+# Contrats
+ContratResource.post.__doc__ = """
+Créer un contrat
+---
+tags:
+  - Contrats
+summary: Créer un nouveau contrat de travail
+security:
+  - JWT: []
+parameters:
+  - in: body
+    name: contrat_data
+    required: true
+    schema:
+      $ref: '#/definitions/ContratRequest'
+responses:
+  201:
+    description: Contrat créé
+"""
 
-# === ROUTES GESTION DES CONTRATS ===
+PersonnelContratsResource.get.__doc__ = """
+Contrats d'un personnel
+---
+tags:
+  - Contrats
+summary: Obtenir tous les contrats d'un personnel
+security:
+  - JWT: []
+parameters:
+  - in: path
+    name: personnel_id
+    type: integer
+    required: true
+responses:
+  200:
+    description: Liste des contrats
+"""
 
-@personnel_bp.route('/contrats/create', methods=['POST'])
-def create_contrat():
-    """
-    Crée un nouveau contrat
-    Headers: Authorization: Bearer <token>
-    
-    Body JSON:
-    {
-        "personnel_id": int,
-        "type": "CDI|CDD|Stage|Consultant",
-        "date_debut": "YYYY-MM-DD",
-        "date_fin": "YYYY-MM-DD (optionnel pour CDI)",
-        "salaire_base": float
-    }
-    
-    Nécessite: permission 'manage_hr' ET user_type 'responsable_rh' ou 'administrateur'
-    """
-    verify_jwt_in_request()
-    claims = get_jwt()
-    
-    if claims.get('user_type') not in ['responsable_rh', 'administrateur']:
-        return jsonify({'error': 'Access restricted to HR managers and administrators'}), 403
-        
-    if 'manage_hr' not in claims.get('permissions', []):
-        return jsonify({'error': 'Insufficient HR permissions'}), 403
-    
-    return ContratController.create_contrat()
+# Rubriques
+RubriqueResource.post.__doc__ = """
+Créer une rubrique
+---
+tags:
+  - Rubriques
+summary: Créer une nouvelle rubrique de paie
+security:
+  - JWT: []
+parameters:
+  - in: body
+    name: rubrique_data
+    required: true
+    schema:
+      $ref: '#/definitions/RubriqueRequest'
+responses:
+  201:
+    description: Rubrique créée
+"""
 
-@personnel_bp.route('/contrats/personnel/<int:personnel_id>', methods=['GET'])
-def get_contrats_personnel(personnel_id):
-    """
-    Récupère tous les contrats d'un personnel
-    Headers: Authorization: Bearer <token>
-    
-    Nécessite: permission 'view_personnel' ou 'manage_hr'
-    """
-    verify_jwt_in_request()
-    return ContratController.get_contrats_personnel(personnel_id)
+AssignRubriqueResource.post.__doc__ = """
+Assigner rubrique à poste
+---
+tags:
+  - Rubriques
+summary: Assigner une rubrique à un poste avec montant
+security:
+  - JWT: []
+parameters:
+  - in: body
+    name: assignment_data
+    required: true
+    schema:
+      type: object
+      required: [poste_id, rubrique_id, montant]
+      properties:
+        poste_id: {type: integer}
+        rubrique_id: {type: integer}
+        montant: {type: number, format: float}
+responses:
+  200:
+    description: Rubrique assignée
+"""
 
-@personnel_bp.route('/contrats/expires', methods=['GET'])
-def get_contrats_expires():
-    """
-    Récupère les contrats qui arrivent à expiration (dans les 30 jours)
-    Headers: Authorization: Bearer <token>
-    
-    Nécessite: permission 'manage_hr'
-    """
-    verify_jwt_in_request()
-    claims = get_jwt()
-    
-    if 'manage_hr' not in claims.get('permissions', []):
-        return jsonify({'error': 'Insufficient HR permissions'}), 403
-    
-    return ContratController.get_contrats_expires()
+# Dashboards
+HRDashboardResource.get.__doc__ = """
+Dashboard RH
+---
+tags:
+  - Dashboards
+summary: Statistiques du dashboard RH
+security:
+  - JWT: []
+responses:
+  200:
+    description: Statistiques RH
+    schema:
+      type: object
+      properties:
+        message: {type: string}
+        stats:
+          type: object
+          properties:
+            total_personnel: {type: integer}
+            nouveaux_ce_mois: {type: integer}
+            conges_en_attente: {type: integer}
+            conges_approuves_ce_mois: {type: integer}
+        hr_manager: {type: string}
+        timestamp: {type: string}
+"""
 
-# === ROUTES GESTION DES RUBRIQUES DE PAIE ===
+AccountingDashboardResource.get.__doc__ = """
+Dashboard comptable paie
+---
+tags:
+  - Dashboards
+summary: Résumé comptable de la paie
+security:
+  - JWT: []
+responses:
+  200:
+    description: Statistiques comptables
+    schema:
+      type: object
+      properties:
+        message: {type: string}
+        stats:
+          type: object
+          properties:
+            exercices_ouverts: {type: integer}
+            exercices_clos: {type: integer}
+            dernier_exercice: {type: object}
+            total_paies_traitees: {type: integer}
+            montant_total_paies: {type: number}
+        comptable: {type: string}
+        timestamp: {type: string}
+"""
 
-@personnel_bp.route('/rubriques/create', methods=['POST'])
-def create_rubrique():
-    """
-    Crée une nouvelle rubrique de paie
-    Headers: Authorization: Bearer <token>
-    
-    Body JSON:
-    {
-        "libelle": "string",
-        "type": "gain|retenue|information",
-        "mode_p": "fixe|variable|%",
-        "valeur": float
-    }
-    
-    Nécessite: user_type 'comptable' ou 'administrateur' ET permission 'manage_accounting'
-    """
-    verify_jwt_in_request()
-    claims = get_jwt()
-    
-    if claims.get('user_type') not in ['comptable', 'administrateur']:
-        return jsonify({'error': 'Access restricted to accountants and administrators'}), 403
-        
-    if 'manage_accounting' not in claims.get('permissions', []):
-        return jsonify({'error': 'Insufficient accounting permissions'}), 403
-    
-    return RubriqueController.create_rubrique()
+# System
+HealthResource.get.__doc__ = """
+Santé du module RH
+---
+tags:
+  - System
+summary: Vérifier l'état du module RH
+responses:
+  200:
+    description: Module opérationnel
+    schema:
+      type: object
+      properties:
+        status: {type: string}
+        timestamp: {type: string}
+        features: 
+          type: array
+          items: {type: string}
+"""
 
-@personnel_bp.route('/rubriques/assign-poste', methods=['POST'])
-def assign_rubrique_to_poste():
-    """
-    Assigne une rubrique à un poste
-    Headers: Authorization: Bearer <token>
-    
-    Body JSON:
-    {
-        "poste_id": int,
-        "rubrique_id": int,
-        "montant": float
-    }
-    
-    Nécessite: user_type 'comptable' ou 'administrateur' ET permission 'manage_accounting'
-    """
-    verify_jwt_in_request()
-    claims = get_jwt()
-    
-    if claims.get('user_type') not in ['comptable', 'administrateur']:
-        return jsonify({'error': 'Access restricted to accountants and administrators'}), 403
-        
-    if 'manage_accounting' not in claims.get('permissions', []):
-        return jsonify({'error': 'Insufficient accounting permissions'}), 403
-    
-    return RubriqueController.assign_rubrique_to_poste()
+TestPermissionsResource.get.__doc__ = """
+Test des permissions RH
+---
+tags:
+  - System
+summary: Analyser les permissions de l'utilisateur actuel
+security:
+  - JWT: []
+responses:
+  200:
+    description: Analyse des permissions
+    schema:
+      type: object
+      properties:
+        message: {type: string}
+        user_id: {type: string}
+        username: {type: string}
+        user_type: {type: string}
+        all_permissions: {type: array, items: {type: string}}
+        personnel_permissions: {type: array, items: {type: string}}
+        can_manage_hr: {type: boolean}
+        can_manage_accounting: {type: boolean}
+        can_view_personnel: {type: boolean}
+"""
 
-@personnel_bp.route('/rubriques/poste/<int:poste_id>', methods=['GET'])
-def get_poste_rubriques(poste_id):
-    """
-    Récupère les rubriques assignées à un poste
-    Headers: Authorization: Bearer <token>
-    
-    Nécessite: permission 'manage_accounting' ou 'view_personnel'
-    """
-    verify_jwt_in_request()
-    return RubriqueController.get_poste_rubriques(poste_id)
+# === ENREGISTREMENT DES ROUTES ===
+api.add_resource(PersonnelResource, '/')
+api.add_resource(PersonnelDetailResource, '/<int:personnel_id>')
 
+# Routes congés
+api.add_resource(CongeResource, '/conges')
+api.add_resource(CongeApproveResource, '/conges/<int:conge_id>/approve')
+api.add_resource(CongeRejectResource, '/conges/<int:conge_id>/reject')
+api.add_resource(PersonnelCongesResource, '/conges/personnel/<int:personnel_id>')
 
-# === ROUTES GESTION DE LA PAIE ===
+# Routes paie
+api.add_resource(PayrollExerciceResource, '/payroll/exercice')
+api.add_resource(PayrollProcessResource, '/payroll/process')
+api.add_resource(BulletinPaieResource, '/payroll/bulletin/<int:personnel_id>/<int:exercice_id>')
 
-@personnel_bp.route('/payroll/exercice/create', methods=['POST'])
-def create_exercice():
-    verify_jwt_in_request()
-    """
-    Crée un nouvel exercice comptable
-    Headers: Authorization: Bearer <token>
-    
-    Body JSON:
-    {
-        "mois_annee": "string (format: YYYY-MM)"
-    }
-    
-    Nécessite: user_type 'comptable' ou 'administrateur' ET permission 'manage_accounting'
-    """
-    return PayrollController.create_exercice()
+# Routes référentiels
+api.add_resource(ReferentielServicesResource, '/referentiels/services')
+api.add_resource(ReferentielPostesResource, '/referentiels/postes')
+api.add_resource(ReferentielExercicesResource, '/referentiels/exercices')
+api.add_resource(ReferentielRubriquesResource, '/referentiels/rubriques')
 
-@personnel_bp.route('/payroll/process', methods=['POST'])
-def process_payroll():
-    """
-    Traite la paie pour un exercice donné
-    Headers: Authorization: Bearer <token>
-    
-    Body JSON:
-    {
-        "exercice_id": int,
-        "personnel_ids": [int] (optionnel, tous si non spécifié)
-    }
-    
-    Nécessite: user_type 'comptable' ou 'administrateur' ET permission 'manage_accounting'
-    """
-    return PayrollController.process_payroll()
+# Routes documents
+api.add_resource(DocumentResource, '/<int:personnel_id>/documents')
+api.add_resource(DocumentDeleteResource, '/documents/<int:document_id>')
 
-@personnel_bp.route('/payroll/bulletin/<int:personnel_id>/<int:exercice_id>', methods=['GET'])
-def get_bulletin_paie(personnel_id, exercice_id):
-    """
-    Récupère le bulletin de paie d'un personnel pour un exercice
-    Headers: Authorization: Bearer <token>
-    
-    Nécessite: permission 'manage_accounting' ou utilisateur peut voir son propre bulletin
-    """
-    return PayrollController.get_bulletin_paie(personnel_id, exercice_id)
+# Routes absences
+api.add_resource(AbsenceResource, '/absences')
+api.add_resource(PersonnelAbsencesResource, '/absences/personnel/<int:personnel_id>')
+api.add_resource(RapportAbsencesResource, '/absences/rapport')
 
-@personnel_bp.route('/payroll/report/<int:exercice_id>', methods=['GET'])
-def get_rapport_paie(exercice_id):
-    """
-    Génère un rapport de paie pour un exercice
-    Headers: Authorization: Bearer <token>
-    Query Params:
-    - service_id: int (filtrer par service)
-    Nécessite: user_type 'comptable' ou 'administrateur' ET permission 'manage_accounting'
-    """
-    try:
-        verify_jwt_in_request()
-        claims = get_jwt()
-        
-        # Vérification des permissions
-        if claims.get('user_type') not in ['comptable', 'administrateur']:
-            return jsonify({'error': 'Access restricted to accountants and administrators'}), 403
-        if 'manage_accounting' not in claims.get('permissions', []):
-            return jsonify({'error': 'Insufficient accounting permissions'}), 403
-        
-        # Import déplacé en haut pour éviter les erreurs
-        from .services import PayrollService
-        from flask import request
-        
-        # Récupération des paramètres de requête
-        service_id = request.args.get('service_id', type=int)
-        
-        # CORRECTION: Passer service_id au service si fourni
-        if service_id:
-            rapport = PayrollService.get_rapport_paie(exercice_id, service_id=service_id)
-        else:
-            rapport = PayrollService.get_rapport_paie(exercice_id)
-        
-        # CORRECTION: Vérifier que le rapport n'est pas None
-        if not rapport:
-            return jsonify({
-                'success': False,
-                'error': 'No payroll data found for this exercise'
-            }), 404
-        
-        # CORRECTION: Gestion flexible de la structure de retour
-        exercice_info = rapport['exercice']
-        if hasattr(exercice_info, 'id'):  # Si c'est un objet SQLAlchemy
-            exercice_data = {
-                'id': exercice_info.id,
-                'mois_annee': exercice_info.mois_annee,
-                'status': exercice_info.status
-            }
-        else:  # Si c'est déjà un dictionnaire
-            exercice_data = exercice_info
-        
-        # CORRECTION: Utiliser des noms de clés cohérents
-        response_data = {
-            'exercice': exercice_data,
-            'lignes': rapport.get('personnel_data', rapport.get('lignes', [])),
-            'totaux': rapport.get('totaux', {}),
-            'filters_applied': {
-                'service_id': service_id
-            } if service_id else {}
-        }
-        
-        return jsonify({
-            'success': True,
-            'message': 'Payroll report generated successfully',
-            'data': response_data,
-            'generated_by': claims.get('username'),
-            'generated_at': datetime.utcnow().isoformat()
-        }), 200
-        
-    except ValueError as ve:
-        # Erreurs de validation (exercice inexistant, etc.)
-        return jsonify({
-            'success': False,
-            'error': str(ve)
-        }), 400
-        
-    except PermissionError as pe:
-        # Erreurs de permissions
-        return jsonify({
-            'success': False,
-            'error': str(pe)
-        }), 403
-        
-    except Exception as e:
-        # Log l'erreur pour debugging
-        print(f"[PAYROLL_REPORT_ERROR] Exercice {exercice_id}: {str(e)}")
-        
-        return jsonify({
-            'success': False,
-            'error': f'Failed to generate payroll report: {str(e)}'
-        }), 500
+# Routes contrats
+api.add_resource(ContratResource, '/contrats')
+api.add_resource(PersonnelContratsResource, '/contrats/personnel/<int:personnel_id>')
+api.add_resource(ContratsExpiresResource, '/contrats/expires')
 
-@personnel_bp.route('/payroll/exercice/<int:exercice_id>/close', methods=['PUT'])
-def close_exercice(exercice_id):
-    """
-    Clôture un exercice comptable
-    Headers: Authorization: Bearer <token>
-    
-    Nécessite: user_type 'comptable' ou 'administrateur' ET permission 'manage_accounting'
-    """
-    try:
-        verify_jwt_in_request()
-        claims = get_jwt()
-        user_id = get_jwt_identity()
-        
-        if claims.get('user_type') not in ['comptable', 'administrateur']:
-            return jsonify({'error': 'Access restricted to accountants and administrators'}), 403
-            
-        if 'manage_accounting' not in claims.get('permissions', []):
-            return jsonify({'error': 'Insufficient accounting permissions'}), 403
-        
-        from .services import PayrollService
-        
-        exercice = PayrollService.close_exercice(exercice_id, user_id)
-        
-        return jsonify({
-            'success': True,
-            'message': 'Exercice clôturé avec succès',
-            'data': {
-                'id': exercice.id,
-                'mois_annee': exercice.mois_annee,
-                'status': exercice.status
-            }
-        })
-        
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'message': str(e)
-        }), 400
+# Routes rubriques
+api.add_resource(RubriqueResource, '/rubriques')
+api.add_resource(AssignRubriqueResource, '/rubriques/assign-poste')
+api.add_resource(PosteRubriquesResource, '/rubriques/poste/<int:poste_id>')
 
+# Routes dashboards
+api.add_resource(HRDashboardResource, '/hr/dashboard')
+api.add_resource(AccountingDashboardResource, '/accounting/payroll-summary')
 
-# === ROUTES RÉFÉRENTIELS ===
-
-@personnel_bp.route('/referentiels/services', methods=['GET'])
-def get_services():
-    """
-    Récupère la liste des services/départements
-    Headers: Authorization: Bearer <token>
-    
-    Accessible à tous les utilisateurs connectés
-    """
-    return ReferentielController.get_services()
-
-@personnel_bp.route('/referentiels/postes', methods=['GET'])
-def get_postes():
-    """
-    Récupère la liste des postes/fonctions
-    Headers: Authorization: Bearer <token>
-    
-    Accessible à tous les utilisateurs connectés
-    """
-    return ReferentielController.get_postes()
-
-@personnel_bp.route('/referentiels/exercices', methods=['GET'])
-def get_exercices():
-    """
-    Récupère la liste des exercices comptables
-    Headers: Authorization: Bearer <token>
-    
-    Nécessite: permission 'manage_accounting' ou 'view_personnel'
-    """
-    return ReferentielController.get_exercices()
-
-@personnel_bp.route('/referentiels/rubriques', methods=['GET'])
-def get_rubriques():
-    """
-    Récupère la liste des rubriques de paie
-    Headers: Authorization: Bearer <token>
-    
-    Query Params:
-    - type: string (gain, retenue, information)
-    
-    Nécessite: permission 'manage_accounting'
-    """
-    return ReferentielController.get_rubriques()
-
-# === ROUTES SPÉCIALISÉES PAR TYPE D'UTILISATEUR ===
-
-@personnel_bp.route('/hr/dashboard', methods=['GET'])
-def hr_dashboard():
-    """
-    [RESPONSABLE RH] Dashboard avec statistiques RH
-    Headers: Authorization: Bearer <token>
-    
-    Nécessite: user_type='responsable_rh' ET permission 'manage_hr'
-    """
-    try:
-        verify_jwt_in_request()
-        claims = get_jwt()
-        
-        if claims.get('user_type') != 'responsable_rh':
-            return jsonify({'error': 'Access restricted to HR managers'}), 403
-            
-        if 'manage_hr' not in claims.get('permissions', []):
-            return jsonify({'error': 'Insufficient HR permissions'}), 403
-        
-        from .models import Personnel, Conge
-        from core.database import db
-        
-        # Statistiques RH
-        stats = {
-            'total_personnel': Personnel.query.filter_by(status='actif').count(),
-            'nouveaux_ce_mois': Personnel.query.filter(
-                Personnel.status == 'actif',
-                db.extract('month', Personnel.date_embauche) == datetime.now().month,
-                db.extract('year', Personnel.date_embauche) == datetime.now().year
-            ).count(),
-            'conges_en_attente': Conge.query.filter_by(status='demande').count(),
-            'conges_approuves_ce_mois': Conge.query.filter(
-                Conge.status == 'approuve',
-                db.extract('month', Conge.date_debut) == datetime.now().month
-            ).count()
-        }
-        
-        return jsonify({
-            'message': 'HR Dashboard data retrieved',
-            'stats': stats,
-            'hr_manager': claims.get('username'),
-            'timestamp': datetime.utcnow().isoformat()
-        }), 200
-        
-    except Exception as e:
-        return jsonify({'error': f'HR dashboard failed: {str(e)}'}), 500
-
-@personnel_bp.route('/accounting/payroll-summary', methods=['GET'])
-def accounting_payroll_summary():
-    """
-    [COMPTABLE] Résumé des paies et exercices
-    Headers: Authorization: Bearer <token>
-    
-    Nécessite: user_type='comptable' ET permission 'manage_accounting'
-    """
-    try:
-        verify_jwt_in_request()
-        claims = get_jwt()
-        
-        if claims.get('user_type') != 'comptable':
-            return jsonify({'error': 'Access restricted to accountants'}), 403
-            
-        if 'manage_accounting' not in claims.get('permissions', []):
-            return jsonify({'error': 'Insufficient accounting permissions'}), 403
-        
-        from .models import Exercice, Payer, Personnel
-        from core.database import db
-        
-        # Statistiques comptables
-        stats = {
-            'exercices_ouverts': Exercice.query.filter_by(status='ouvert').count(),
-            'exercices_clos': Exercice.query.filter_by(status='clos').count(),
-            'dernier_exercice': Exercice.query.order_by(Exercice.mois_annee.desc()).first(),
-            'total_paies_traitees': db.session.query(Payer.personnel_id).distinct().count(),
-            'montant_total_paies': db.session.query(db.func.sum(Payer.montant)).scalar() or 0
-        }
-        
-        # Formater le dernier exercice
-        if stats['dernier_exercice']:
-            stats['dernier_exercice'] = {
-                'id': stats['dernier_exercice'].id,
-                'mois_annee': stats['dernier_exercice'].mois_annee,
-                'status': stats['dernier_exercice'].status
-            }
-        
-        return jsonify({
-            'message': 'Accounting payroll summary retrieved',
-            'stats': stats,
-            'comptable': claims.get('username'),
-            'timestamp': datetime.utcnow().isoformat()
-        }), 200
-        
-    except Exception as e:
-        return jsonify({'error': f'Accounting summary failed: {str(e)}'}), 500
-
-# === ROUTES DE TEST ET HEALTH ===
-
-@personnel_bp.route('/health', methods=['GET'])
-def health():
-    """Check de santé du module personnel"""
-    return {
-        'status': 'Personnel module running',
-        'timestamp': datetime.utcnow().isoformat(),
-        'features': [
-            'Personnel management',
-            'Leave management', 
-            'Payroll processing',
-            'Contract management'
-        ]
-    }, 200
-
-@personnel_bp.route('/test-permissions', methods=['GET'])
-def test_permissions():
-    """
-    Test des permissions du module personnel
-    Headers: Authorization: Bearer <token>
-    """
-    try:
-        verify_jwt_in_request()
-        claims = get_jwt()
-        user_id = get_jwt_identity()
-        
-        # Analyser les permissions personnel
-        permissions = claims.get('permissions', [])
-        personnel_permissions = [p for p in permissions if 'hr' in p or 'accounting' in p or 'personnel' in p]
-        
-        return jsonify({
-            'message': 'Personnel permissions analyzed',
-            'user_id': user_id,
-            'username': claims.get('username'),
-            'user_type': claims.get('user_type', 'user'),
-            'all_permissions': permissions,
-            'personnel_permissions': personnel_permissions,
-            'can_manage_hr': 'manage_hr' in permissions,
-            'can_manage_accounting': 'manage_accounting' in permissions,
-            'can_view_personnel': 'view_personnel' in permissions
-        }), 200
-        
-    except Exception as e:
-        return jsonify({'error': f'Permission test failed: {str(e)}'}), 401
-
-# === ROUTE D'INITIALISATION ===
-
-@personnel_bp.route('/init-personnel-system', methods=['POST'])
-def init_personnel_system():
-    """
-    Initialise le système de gestion du personnel avec données de test
-    ⚠️  À utiliser uniquement en développement
-    """
-    try:
-        from .services import PersonnelInitService
-        success = PersonnelInitService.init_personnel_system()
-        
-        if success:
-            return jsonify({
-                'message': 'Personnel management system initialized successfully',
-                'components_created': [
-                    'Services/Départements',
-                    'Postes/Fonctions',
-                    'Rubriques de paie',
-                    'Structure de base'
-                ],
-                'warning': 'This is for development only'
-            }), 200
-        else:
-            return jsonify({
-                'error': 'Personnel system initialization failed'
-            }), 500
-        
-    except Exception as e:
-        return jsonify({
-            'error': f'Initialization failed: {str(e)}'
-        }), 500
+# Routes système
+api.add_resource(HealthResource, '/health')
+api.add_resource(TestPermissionsResource, '/test-permissions')

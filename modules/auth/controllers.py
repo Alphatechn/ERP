@@ -1,3 +1,4 @@
+
 from flask import request, jsonify
 from .services import ExtendedAuthService
 from flask_jwt_extended import verify_jwt_in_request, get_jwt, get_jwt_identity
